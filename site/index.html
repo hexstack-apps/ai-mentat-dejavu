@@ -2,6 +2,8 @@
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>AI Déjà Vu — train, store, act</title>
+<link rel="manifest" href="manifest.webmanifest">
+<meta name="theme-color" content="#58a6ff">
 <meta name="description" content="Train an image classifier in your browser, store it in IndexedDB, and fire webhook or console actions on every match.">
 <style>
 :root{--bg:#0d1117;--card:#161b22;--line:#30363d;--tx:#c9d1d9;--dim:#8b949e;
@@ -206,5 +208,39 @@ import { boot } from './dist/mvp.js';
 boot().catch(e => {
   document.getElementById('log').textContent = 'boot failed: ' + (e && e.message || e);
 });
+</script>
+
+<script>
+// Register the service worker. updateViaCache:'none' is essential — without it
+// the browser may serve sw.js itself from cache, the BUILD id never changes and
+// the whole busting scheme is inert.
+if ('serviceWorker' in navigator) {
+  addEventListener('load', () => {
+    navigator.serviceWorker.register('sw.js', { updateViaCache: 'none' })
+      .then(reg => {
+        // A new build is waiting: take over immediately rather than sitting
+        // behind until every tab closes.
+        reg.addEventListener('updatefound', () => {
+          const w = reg.installing;
+          if (!w) return;
+          w.addEventListener('statechange', () => {
+            if (w.state === 'installed' && navigator.serviceWorker.controller) {
+              w.postMessage('skipWaiting');
+            }
+          });
+        });
+        reg.update();
+      })
+      .catch(() => { /* SW is an enhancement; the app works without it */ });
+    // When the new worker takes control, reload ONCE so the page runs the
+    // freshly deployed modules.
+    let reloaded = false;
+    navigator.serviceWorker.addEventListener('controllerchange', () => {
+      if (reloaded) return;
+      reloaded = true;
+      location.reload();
+    });
+  });
+}
 </script>
 </body></html>

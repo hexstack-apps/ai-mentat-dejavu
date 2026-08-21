@@ -29,6 +29,8 @@ const studioHtml = read('../site/studio.html');
 const mvpTs = read('../src/mvp.ts');
 const mvpHtml = read('../site/index.html');
 const metersTs = read('../src/meters.ts');
+const swJs = read('../site/sw.js');
+const manifest = read('../site/manifest.webmanifest');
 
 // ---------------------------------------------------------------- 4. no null $()
 function idsUsed(src: string): string[] {
@@ -245,6 +247,52 @@ function idsDefined(html: string): Set<string> {
   check('staleness hidden when negligible',
         metersTs.includes('staleMs > 250'),
         'no need to clutter the verdict at 5 ms');
+}
+
+// ---------------------------------------------------------------- PWA
+{
+  // Cloudflare Pages serves /dist/*.js with max-age=14400, and the Direct Upload
+  // API ignores _headers (verified: it is served as a static file, 200). So the
+  // service worker is the ONLY thing preventing a four-hour-stale bundle.
+  check('sw uses a build-stamped cache name',
+        swJs.includes("const BUILD = '__BUILD__'") && swJs.includes("'aidejavu-' + BUILD"),
+        'a fixed cache name never busts');
+  check('activate deletes every non-current cache',
+        /caches\.keys\(\)[\s\S]{0,200}caches\.delete/.test(swJs));
+  check('app code is fetched NETWORK-first',
+        /fetch\(req, \{ cache: 'no-cache' \}\)/.test(swJs),
+        'cache-first would reintroduce the stale-module bug this fixes');
+  check('offline falls back to cache',
+        swJs.includes('caches.match(req)') && swJs.includes("req.mode === 'navigate'"));
+  check('third-party model weights are not intercepted',
+        swJs.includes('url.origin !== self.location.origin'),
+        'never cache 1.6-23 MB of CDN weights we do not control');
+  check('registration disables the sw.js http cache',
+        studioHtml.includes("updateViaCache: 'none'") &&
+        mvpHtml.includes("updateViaCache: 'none'"),
+        'a cached sw.js freezes the BUILD id and nothing ever busts');
+  check('a new worker takes over without waiting for tabs to close',
+        studioHtml.includes("postMessage('skipWaiting')") &&
+        swJs.includes("self.skipWaiting()"));
+  check('controllerchange reloads exactly once',
+        /reloaded = true;\s*location\.reload\(\)/.test(studioHtml),
+        'without the guard it loops');
+  // Window is 800 chars: the registration block carries an updatefound handler
+  // between register() and .catch(), measured at 555.
+  check('sw failure does not break the app',
+        /\.register\([\s\S]{0,800}?\.catch\(/.test(studioHtml),
+        'the SW is an enhancement, not a dependency');
+  const mf = JSON.parse(manifest);
+  check('manifest is installable',
+        !!mf.name && !!mf.start_url && mf.display === 'standalone' && mf.icons.length >= 2,
+        `${mf.icons.length} icons, display ${mf.display}`);
+  check('manifest has a maskable icon',
+        mf.icons.some((i: any) => i.purpose === 'maskable'),
+        'Android crops non-maskable icons badly');
+  for (const page of [['studio', studioHtml], ['demo', mvpHtml]] as const) {
+    check(`${page[0]} links the manifest`,
+          page[1].includes('rel="manifest"') && page[1].includes('theme-color'));
+  }
 }
 
 console.log(failed ? `\n${failed} FAILURE(S)` : '\nALL PASS');
