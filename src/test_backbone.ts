@@ -75,5 +75,35 @@ const src = (f: string) => readFileSync(new URL(`../src/${f}`, import.meta.url),
   check('384-d head still small', bytes < 30_000, `${(bytes / 1024).toFixed(1)} KB`);
 }
 
+// ---------------------------------------------------------------- TM backbone
+{
+  const tm = src('tmnet.ts');
+  const studio = src('studio.ts');
+  check('TM MobileNetV2 is offered for images',
+        /image:\s*\[[\s\S]{0,500}?tmnet/.test(studio));
+  check('tmnet is runnable and routed as image',
+        /RUNNABLE[\s\S]{0,120}tmnet: 'image'/.test(studio));
+  check('loader rejects a classifier head',
+        tm.includes('looks like a classifier head') && tm.includes('TM_DIM'),
+        'a logits export measured 1.40 separation vs 2.26 for real features');
+  check('prefers WebGL, falls back to CPU',
+        tm.includes("tf.setBackend('webgl')") && tm.includes("tf.setBackend('cpu')"),
+        'measured 70 ms GPU vs 1188 ms CPU');
+  check('frees GPU tensors',
+        tm.includes('tf.tidy') && tm.includes('t.dispose()'),
+        'WebGL textures leak in continuous mode without this');
+  check('concurrent loads share one promise',
+        tm.includes('if (loading) return loading'));
+  check('a failed load does not poison retries',
+        tm.includes('loading.catch'));
+  check('resizes to the 224 input the model expects',
+        tm.includes('INPUT = 224') && tm.includes('drawImage'));
+  check('inputs normalised to [-1,1]',
+        tm.includes('127.5') && tm.includes('tf.sub'));
+  check('weights come from Google\'s public bucket',
+        tm.includes('storage.googleapis.com/teachable-machine-models'),
+        'Apache-2.0, CORS verified for this origin');
+}
+
 console.log(failed ? `\n${failed} FAILURE(S)` : '\nALL PASS');
 process.exit(failed ? 1 : 0);

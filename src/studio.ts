@@ -19,6 +19,7 @@ import { embedAudio, AUDIO_DIM, decodeAudioFile, rmsDb, resample, toMono } from 
 import type { Surface } from './dataset.js';
 import { renderVerdict } from './meters.js';
 import { loadBackbone, backboneReady } from './backbone.js';
+import { loadTmNet, tmReady, TM_DIM } from './tmnet.js';
 
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
 const pct = (v: number) => `${(v * 100).toFixed(1)}%`;
@@ -38,6 +39,8 @@ const log = (m: string, cls = '') => {
 const EXTRACTORS_BY_MODALITY: Record<Modality, { name: string; dim: number; label: string }[]> = {
   image: [
     { name: 'photo', dim: PHOTO_DIM, label: `fast hand-built (${PHOTO_DIM}-d, ~5 ms)` },
+    { name: 'tmnet', dim: TM_DIM,
+      label: `TM MobileNetV2 (${TM_DIM}-d, ~70 ms GPU, 1.6 MB)` },
     { name: 'dinov2', dim: 384, label: 'DINOv2 pretrained (384-d, ~2 s, 23 MB)' },
   ],
   audio: [
@@ -82,12 +85,7 @@ async function featurise(s: Sample): Promise<Vec> {
   let v: Vec;
   if (s.modality === 'image') {
     const surf = await fileToSurface(s.blob);
-    if (ex === 'dinov2') {
-      const bb = await loadBackbone(m => log(m));
-      v = await bb.embed(surf);
-    } else {
-      v = embedPhoto(surf);
-    }
+    v = await embedFor(ex, surf);
   } else {
     const { samples: pcm, sampleRate } = await decodeAudioFile(s.blob);
     v = embedAudio(pcm, sampleRate);
@@ -103,6 +101,10 @@ async function embedFor(extractor: string, surf: Surface): Promise<Vec> {
     const bb = await loadBackbone(m => log(m));
     return bb.embed(surf);
   }
+  if (extractor === 'tmnet') {
+    const bb = await loadTmNet(m => log(m));
+    return bb.embed(surf);
+  }
   if (extractor === 'photo') return embedPhoto(surf);
   // Never fall through to a default: the shapes demo stores v1/v2 models in the
   // SAME database, and feeding photo features to a v2 head (26-d vs 116-d) would
@@ -111,7 +113,8 @@ async function embedFor(extractor: string, surf: Surface): Promise<Vec> {
 }
 
 /** Extractors this page can actually run, per modality. */
-const RUNNABLE: Record<string, Modality> = { photo: 'image', dinov2: 'image', mel: 'audio' };
+const RUNNABLE: Record<string, Modality> =
+  { photo: 'image', tmnet: 'image', dinov2: 'image', mel: 'audio' };
 
 /** Is a stored model usable here, and if not, why? */
 function compatibility(rec: StoredModel): { ok: boolean; reason: string } {
@@ -584,6 +587,9 @@ export async function boot() {
     if (e.name === 'dinov2' && !backboneReady()) {
       log('first training run will download the backbone (~23 MB, then cached)', 'o');
     }
+    if (e.name === 'tmnet' && !tmReady()) {
+      log("first run downloads Teachable Machine's MobileNetV2 (~1.6 MB, then cached)", 'o');
+    }
     await refreshSamples();   // duplicate/vector state is per-extractor
   });
   renderExtractorChoices();
@@ -736,7 +742,7 @@ export async function boot() {
   $('runBtn').addEventListener('click', async () => {
     if (!active) return;
     try {
-      if (active.rec.extractor === 'photo' || active.rec.extractor === 'dinov2') {
+      if (RUNNABLE[active.rec.extractor] === 'image') {
         const v = $<HTMLVideoElement>('cam');
         if (stream && v.videoWidth) {
           await runInference(await embedFor(active.rec.extractor, videoToSurface(v)), 'camera');
@@ -756,7 +762,7 @@ export async function boot() {
     const f = (e.target as HTMLInputElement).files?.[0];
     if (!f || !active) return;
     try {
-      if (active.rec.extractor === 'photo' || active.rec.extractor === 'dinov2') {
+      if (RUNNABLE[active.rec.extractor] === 'image') {
         await runInference(await embedFor(active.rec.extractor, await fileToSurface(f)), 'file');
       } else {
         const { samples: pcm, sampleRate } = await decodeAudioFile(f);
