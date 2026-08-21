@@ -22,14 +22,7 @@
  */
 
 const BUNDLE = 'https://cdn.jsdelivr.net/npm/@huggingface/transformers@4.2.0/dist/transformers.min.js';
-/** Self-supervised ViT backbones. Both are 384-d and 224x224, so one loader
- *  serves both — only the repo id differs. */
-const MODELS: Record<string, { repo: string; mb: number }> = {
-  dinov2: { repo: 'onnx-community/dinov2-small', mb: 23 },
-  // DINOv3 trained on LVD-1689M vs DINOv2's LVD-142M (~10x the corpus) and is
-  // SMALLER on disk. Same output shape, so it needs no separate code path.
-  dinov3: { repo: 'onnx-community/dinov3-vits16-pretrain-lvd1689m-ONNX', mb: 21 },
-};
+const MODEL_ID = 'onnx-community/dinov2-small';
 
 export interface Backbone {
   id: string;
@@ -37,27 +30,22 @@ export interface Backbone {
   embed(surface: unknown): Promise<Float64Array>;
 }
 
-const loading: Record<string, Promise<Backbone> | undefined> = {};
-const loaded: Record<string, Backbone | undefined> = {};
+let loading: Promise<Backbone> | null = null;
+let loaded: Backbone | null = null;
 
-export function backboneReady(id = 'dinov2'): boolean { return !!loaded[id]; }
+export function backboneReady(): boolean { return loaded !== null; }
 
 /**
  * Load the backbone once. Concurrent callers share the same promise, so tapping
  * "train" twice cannot start two 23 MB downloads.
  */
 export function loadBackbone(
-  id = 'dinov2',
   onProgress?: (msg: string) => void,
 ): Promise<Backbone> {
-  const spec = MODELS[id];
-  if (!spec) return Promise.reject(new Error(`unknown backbone "${id}"`));
-  const hit = loaded[id];
-  if (hit) return Promise.resolve(hit);
-  const inFlight = loading[id];
-  if (inFlight) return inFlight;
+  if (loaded) return Promise.resolve(loaded);
+  if (loading) return loading;
 
-  loading[id] = (async () => {
+  loading = (async () => {
     onProgress?.('loading transformers.js…');
     const T: any = await import(/* @vite-ignore */ BUNDLE);
     const { env, AutoModel, AutoProcessor, RawImage } = T;
@@ -67,9 +55,9 @@ export function loadBackbone(
     env.allowLocalModels = false;
     env.backends.onnx.wasm.numThreads = 1;   // PRoot/mobile dislikes thread pools
 
-    onProgress?.(`downloading ${id} (~${spec.mb} MB, cached after first run)…`);
+    onProgress?.('downloading DINOv2-small (~23 MB, cached after first run)…');
     let lastPct = -10;
-    const model = await AutoModel.from_pretrained(spec.repo, {
+    const model = await AutoModel.from_pretrained(MODEL_ID, {
       dtype: 'q8', device: 'wasm',
       progress_callback: (p: any) => {
         if (p?.status === 'progress' && typeof p.progress === 'number') {
@@ -78,7 +66,7 @@ export function loadBackbone(
         }
       },
     });
-    const proc = await AutoProcessor.from_pretrained(spec.repo);
+    const proc = await AutoProcessor.from_pretrained(MODEL_ID);
 
     // Confirm this export really gives features, not logits. If a future model
     // swap regresses to logits, fail loudly instead of silently degrading.
@@ -90,7 +78,7 @@ export function loadBackbone(
     }
 
     const bb: Backbone = {
-      id,
+      id: 'dinov2',
       dim: 384,
       async embed(surface: any): Promise<Float64Array> {
         const cx = surface.getContext('2d');
@@ -106,12 +94,12 @@ export function loadBackbone(
         return v;
       },
     };
-    loaded[id] = bb;
-    onProgress?.(`${id} ready (384-d features, frozen)`);
+    loaded = bb;
+    onProgress?.('backbone ready (384-d features, frozen)');
     return bb;
   })();
 
   // A failed load must not poison later attempts.
-  loading[id]!.catch(() => { loading[id] = undefined; });
-  return loading[id]!;
+  loading.catch(() => { loading = null; });
+  return loading;
 }
