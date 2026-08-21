@@ -41,33 +41,11 @@ export interface MatchEvent {
 }
 
 const DB = 'tmjs';
-/**
- * MUST match samples.ts. Both modules open the same database, and IndexedDB
- * throws "the requested version (1) is less than the existing version (2)" if
- * one of them asks for an older version — which broke the MVP page for anyone
- * who had visited the studio first. Bump both together, and create every store
- * in both upgrade handlers so whichever module opens first leaves a complete DB.
- */
-const VERSION = 2;
+const VERSION = 1;
 
-/**
- * Open WITHOUT pinning a version number.
- *
- * Pinning was fragile in practice: two modules share this database, and a
- * browser holding a stale cached copy of one module requests an older version
- * than the DB already has, which throws "the requested version (1) is less than
- * the existing version (2)" and kills the page. Observed live — a fresh fetch of
- * store.js reported VERSION 2 while the imported (cached) copy reported 1.
- *
- * Calling open() with no version opens whatever exists, so a stale module can
- * never downgrade-request. If a required store is missing we reopen at
- * version+1 and create it. Self-healing, and immune to module cache skew.
- */
-function openAt(version?: number): Promise<IDBDatabase> {
+function open(): Promise<IDBDatabase> {
   return new Promise((res, rej) => {
-    const req = version === undefined
-      ? indexedDB.open(DB)
-      : indexedDB.open(DB, version);
+    const req = indexedDB.open(DB, VERSION);
     req.onupgradeneeded = () => {
       const db = req.result;
       if (!db.objectStoreNames.contains('models')) {
@@ -78,29 +56,10 @@ function openAt(version?: number): Promise<IDBDatabase> {
         s.createIndex('byModel', 'modelId');
         s.createIndex('byTs', 'ts');
       }
-      if (!db.objectStoreNames.contains('samples')) {
-        const s = db.createObjectStore('samples', { keyPath: 'id', autoIncrement: true });
-        s.createIndex('byProject', 'project');
-        s.createIndex('byLabel', 'label');
-      }
     };
     req.onsuccess = () => res(req.result);
     req.onerror = () => rej(req.error);
   });
-}
-
-const NEEDED = ['models', 'events', 'samples'] as const;
-
-/** Open, and if a store is missing, bump the version once to create it. */
-async function open(): Promise<IDBDatabase> {
-  let db = await openAt();
-  const missing = NEEDED.filter(n => !db.objectStoreNames.contains(n));
-  if (missing.length) {
-    const next = db.version + 1;
-    db.close();
-    db = await openAt(next);
-  }
-  return db;
 }
 
 function tx<T>(store: string, mode: IDBTransactionMode,
