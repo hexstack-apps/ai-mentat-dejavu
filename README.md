@@ -63,10 +63,21 @@ centroid*, adds radial ring occupancy and pose-free scalars (compactness, extent
 
 ## Studio: your own examples
 
-| modality | capture | extractor | dims |
-|---|---|---|---|
-| image | camera frame, image files | colour grid + hue histogram + oriented gradients + edge density | 116 |
-| audio | mic clip (with dB meter), audio files | log-mel band mean/std + 3-segment time profile | 200 |
+| modality | capture | extractor | dims | per image |
+|---|---|---|---|---|
+| image | camera frame, image files | hand-built: colour grid + hue histogram + oriented gradients + edge density | 116 | ~5 ms |
+| image | same | **DINOv2-small pretrained** (optional) | 384 | ~2 s |
+| audio | mic clip (with dB meter), audio files | log-mel band mean/std + 3-segment time profile | 200 | ~20 ms |
+
+Pick the extractor from the *features* dropdown before training. DINOv2 is the
+same idea as Teachable Machine's frozen MobileNet — much better at generalising
+from a handful of real-world examples, at ~400x the cost per image. The runtime
+and weights load from CDNs (one-time ~23 MB, then browser-cached), so the
+deployed site stays ~174 KB.
+
+Inference always uses the extractor recorded **in the model**, never the current
+dropdown: the two vector spaces are incomparable, so a mismatch would produce
+confident nonsense.
 
 Labels are free-form strings, so a binary **yes / no** task is just two labels and
 multi-class needs no different UI. Guardrails:
@@ -100,6 +111,23 @@ identically ~0 for any stationary sound — separation collapsed to **1.27**
 domain ⇒ multiplicative gain is additive) while preserving spectral shape across
 bands: **26.24** and **16.81**. Loudness invariance held — a 10× amplitude change
 moves the vector 15.47 while a pitch change moves it 42.91.
+
+## Versus Teachable Machine
+
+Both are *frozen extractor + trained softmax head* — TM's head is
+`dense → softmax` with categorical cross-entropy and Adam (checked in their
+source); this uses multinomial logistic regression, the same model class.
+
+**Still missing:** pose projects (TM uses PoseNet for 17 body keypoints);
+TFLite / Keras / Coral export; cloud hosting with a shareable model URL;
+tunable epochs / batch size / learning rate in the UI; and a pretrained audio
+backbone (TM builds on `speech-commands`, this uses raw log-mel DSP).
+
+**Added beyond TM:** actions on prediction — `onMatched` / `onNotMatched` with
+independent console/webhook sinks, threshold and multi-target rules, per-branch
+cooldown, and a persisted event log. TM stops at "here is the class". Plus the
+integrity checks, duplicate detection, the trainability guard, raw-capture
+storage, a headless CLI on the identical code path, and a ~1–15 KB model.
 
 ## Match rule
 
