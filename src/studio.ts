@@ -98,7 +98,55 @@ async function embedFor(extractor: string, surf: Surface): Promise<Vec> {
     const bb = await loadBackbone(m => log(m));
     return bb.embed(surf);
   }
-  return embedPhoto(surf);
+  if (extractor === 'photo') return embedPhoto(surf);
+  // Never fall through to a default: the shapes demo stores v1/v2 models in the
+  // SAME database, and feeding photo features to a v2 head (26-d vs 116-d) would
+  // either throw or, worse, produce a confident wrong answer.
+  throw new Error(`this page cannot compute "${extractor}" features`);
+}
+
+/** Extractors this page can actually run, per modality. */
+const RUNNABLE: Record<string, Modality> = { photo: 'image', dinov2: 'image', mel: 'audio' };
+
+/** Is a stored model usable here, and if not, why? */
+function compatibility(rec: StoredModel): { ok: boolean; reason: string } {
+  const m = RUNNABLE[rec.extractor];
+  if (!m) {
+    return {
+      ok: false,
+      reason: `trained with the "${rec.extractor}" extractor, which belongs to the ` +
+              `shapes demo — this page cannot compute those features`,
+    };
+  }
+  return { ok: true, reason: m };
+}
+
+/**
+ * Enable only what can actually work right now.
+ *
+ * The first version left Capture/Record/continuous enabled with no camera, no
+ * mic and no model, so the UI invited an action and then reported an error. A
+ * disabled control with a hint is clearer than a live one that fails.
+ */
+function syncControls() {
+  const hasLabel = !!$<HTMLInputElement>('label').value.trim();
+  const hasStream = !!stream;
+  const hasModel = !!active;
+  $<HTMLButtonElement>('shoot').disabled = !(hasStream && hasLabel);
+  $<HTMLButtonElement>('rec').disabled = !(hasStream && hasLabel);
+  $<HTMLButtonElement>('camOff').disabled = !hasStream;
+  $<HTMLButtonElement>('micOff').disabled = !hasStream;
+  $<HTMLButtonElement>('runBtn').disabled = !hasModel;
+  $<HTMLButtonElement>('loop').disabled = !hasModel;
+  $<HTMLButtonElement>('exportBtn').disabled = !$<HTMLSelectElement>('modelSel').value;
+  $<HTMLButtonElement>('loadBtn').disabled = !$<HTMLSelectElement>('modelSel').value;
+
+  const hint = !hasStream
+    ? (modality === 'image' ? 'turn the camera on, or upload images'
+                            : 'turn the microphone on, or upload audio')
+    : !hasLabel ? 'type a label to start collecting'
+    : 'ready to capture';
+  $('captureHint').textContent = hint;
 }
 
 // ---------------------------------------------------------------- capture
@@ -111,6 +159,7 @@ async function startCamera() {
   v.srcObject = stream;
   await v.play();
   $('camWrap').style.display = '';
+  syncControls();
   log('camera on', 'g');
 }
 
@@ -133,6 +182,7 @@ async function startMic() {
     $('meterBar').style.width = pctv + '%';
     $('meterVal').textContent = `${db.toFixed(0)} dB`;
   }, 100);
+  syncControls();
   log('microphone on', 'g');
 }
 
@@ -143,6 +193,7 @@ async function stopCapture() {
   if (stream) { stream.getTracks().forEach(t => t.stop()); stream = null; }
   $('camWrap').style.display = 'none';
   $('micWrap').style.display = 'none';
+  syncControls();
 }
 
 /** Record a fixed-length clip from the live mic stream. */
@@ -295,7 +346,7 @@ async function train() {
   renderMetrics(rec, cm, checks, labels);
   renderTargets(labels);
   await refreshModels();
-  $<HTMLButtonElement>('runBtn').disabled = false;
+  syncControls();
 }
 
 function renderMetrics(rec: StoredModel, cm: number[][],
@@ -398,9 +449,12 @@ async function renderEvents() {
 async function refreshModels() {
   if (!hasIDB) return;
   const ms = await store.listModels();
-  $<HTMLSelectElement>('modelSel').innerHTML = ms.map(m =>
-    `<option value="${m.id}"${active?.rec.id === m.id ? ' selected' : ''}>` +
-    `${m.name} · ${pct(m.metrics.test)}</option>`).join('');
+  $<HTMLSelectElement>('modelSel').innerHTML = ms.map(m => {
+    const bad = !compatibility(m).ok;
+    return `<option value="${m.id}"${active?.rec.id === m.id ? ' selected' : ''}>` +
+      `${bad ? '⚠ ' : ''}${m.name} · ${pct(m.metrics.test)}` +
+      `${bad ? ' (shapes demo — not usable here)' : ''}</option>`;
+  }).join('');
   const u = await store.usage();
   $('usage').textContent = `${u.models} model(s), ${u.events} event(s), ~${(u.bytes / 1024).toFixed(1)} KB`;
 }
@@ -454,7 +508,11 @@ export async function boot() {
   $('camOff').addEventListener('click', () => { stopCapture(); log('capture stopped'); });
   $('shoot').addEventListener('click', async () => {
     const v = $<HTMLVideoElement>('cam');
-    if (!v.videoWidth) { log('camera not ready', 'r'); return; }
+    if (!stream) { log('turn the camera on first', 'r'); return; }
+    if (!v.videoWidth) { log('camera still starting — try again in a moment', 'o'); return; }
+    if (!$<HTMLInputElement>('label').value.trim()) {
+      log('pick or type a label first', 'r'); return;
+    }
     const s = videoToSurface(v);
     const blob = await canvasToBlob(s as unknown as HTMLCanvasElement);
     await addSample(blob, 'camera', $<HTMLInputElement>('label').value.trim());
@@ -474,6 +532,8 @@ export async function boot() {
   $('rec').addEventListener('click', async () => {
     const ms = +$<HTMLInputElement>('clipMs').value;
     const label = $<HTMLInputElement>('label').value.trim();
+    // Device first: "pick a label" is confusing when the real blocker is no mic.
+    if (!stream) { log('turn the microphone on first', 'r'); return; }
     if (!label) { log('pick or type a label first', 'r'); return; }
     log(`recording ${ms} ms…`);
     try {
@@ -500,12 +560,27 @@ export async function boot() {
     const id = $<HTMLSelectElement>('modelSel').value;
     const rec = id ? await store.getModel(id) : undefined;
     if (!rec) { log('no model selected', 'r'); return; }
+    const compat = compatibility(rec);
+    if (!compat.ok) {
+      log(`cannot load: ${compat.reason}`, 'r');
+      $<HTMLButtonElement>('runBtn').disabled = true;
+      return;
+    }
+    // Align the UI with the model so "Classify now" uses the right capture widget.
+    if (modality !== compat.reason) {
+      modality = compat.reason as Modality;
+      $<HTMLSelectElement>('modality').value = modality;
+      $<HTMLSelectElement>('modality').dispatchEvent(new Event('change', { bubbles: true }));
+      await new Promise(r => setTimeout(r, 0));
+    }
+    chosen[modality] = rec.extractor;
+    $<HTMLSelectElement>('extractor').value = rec.extractor;
     active = { rec, pipe: fromRecord(rec) };
     config.targets = config.targets.filter(t => rec.classes.includes(t));
     if (!config.targets.length) config.targets = [rec.classes[0]];
     renderTargets(rec.classes);
     log(`loaded "${rec.name}" (${rec.extractor}, ${rec.dim}-d)`, 'g');
-    $<HTMLButtonElement>('runBtn').disabled = false;
+    syncControls();
   });
   $('exportBtn').addEventListener('click', async () => {
     const id = $<HTMLSelectElement>('modelSel').value;
@@ -588,8 +663,12 @@ export async function boot() {
     }, Math.max(300, +$<HTMLInputElement>('loopMs').value));
   });
 
+  $('label').addEventListener('input', syncControls);
+  $('modelSel').addEventListener('change', syncControls);
+
   await refreshSamples();
   await refreshModels();
   await renderEvents();
+  syncControls();
   log('studio ready — pick a modality, add samples, train', 'g');
 }

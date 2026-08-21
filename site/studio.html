@@ -18,7 +18,7 @@ button{background:var(--blue);border:0;color:#05080c;padding:9px 14px;border-rad
  font-size:13.5px;font-weight:600;cursor:pointer}
 button.sec{background:#21262d;color:var(--tx);border:1px solid var(--line);font-weight:500}
 button.on{background:var(--red);color:#fff}
-button:disabled{background:#21262d;color:var(--dim);cursor:default}
+button:disabled{background:#1b2029;color:#5a6472;cursor:not-allowed;opacity:.75}
 select,input[type=text],input[type=number]{background:#0d1117;border:1px solid var(--line);
  color:var(--tx);border-radius:6px;padding:6px 8px;font-size:13px}
 input[type=number]{width:78px}
@@ -117,6 +117,8 @@ Nothing is uploaded. <a href="./">← the shapes demo</a></div>
       <span id="meterVal" class="dim" style="font-size:11.5px"></span>
     </div>
   </div>
+
+  <div id="captureHint" class="dim" style="font-size:11.5px;margin-top:9px"></div>
 
   <div style="margin-top:12px">
     <div id="labelChips"></div>
