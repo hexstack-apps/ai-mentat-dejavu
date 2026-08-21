@@ -179,5 +179,43 @@ function idsDefined(html: string): Set<string> {
         /#classify[^{]*\{min-height:44px\}|\.row button[^{]*\{min-height:44px\}/.test(mvpHtml));
 }
 
+// ---------------------------------------------------------------- camera + ux
+{
+  check('front/back camera switch exists',
+        studioTs.includes('function flipCamera(') && studioHtml.includes('id="flip"'));
+  check('flip is hidden/disabled without a stream',
+        studioTs.includes("flip.disabled = !hasStream") &&
+        studioTs.includes("if (!hasStream) flip.style.display = 'none'"),
+        'it overlays the video, so it must not be usable with no camera');
+  check('facingMode is ideal, not exact, with a bare-video fallback',
+        !studioTs.includes("facingMode: { exact:") &&
+        studioTs.includes("{ video: true, audio: false }"),
+        'exact facingMode fails outright on a single-camera device');
+  check('front preview is mirrored but the saved frame is not',
+        studioTs.includes("scaleX(-1)") && studioTs.includes('function unmirror('),
+        'users expect a mirror; the stored sample should match the real scene');
+  check('capture waits for a decodable frame',
+        studioTs.includes('v.readyState < 2'),
+        'videoWidth can be set before the first frame, giving blank captures');
+  check('capture rejects an empty blob',
+        studioTs.includes('blob.size < 256'));
+  check('clearing a project asks for confirmation',
+        studioTs.includes('cannot be undone'),
+        'samples are unrecoverable');
+  check('training scrolls its result into view',
+        studioTs.includes("scrollIntoView"),
+        'metrics render ~800px below the button on a phone');
+  check('status line does not duplicate existing state UI',
+        studioTs.includes('function syncSteps()') &&
+        !/n: 1, ok: nSamples/.test(studioTs),
+        'captureHint and trainability already cover steps 1-2');
+  check('empty event log says what to do',
+        studioTs.includes('classify something in step 5'));
+  for (const id of ['modelSel', 'thr', 'hookUrl']) {
+    check(`${id} has an accessible name`,
+          new RegExp(`id="${id}"[^>]*aria-label=`).test(studioHtml));
+  }
+}
+
 console.log(failed ? `\n${failed} FAILURE(S)` : '\nALL PASS');
 process.exit(failed ? 1 : 0);

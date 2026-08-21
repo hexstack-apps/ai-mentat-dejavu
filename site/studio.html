@@ -35,7 +35,11 @@ th{color:var(--dim);font-size:10.5px;text-transform:uppercase;letter-spacing:.4p
 .kpi{background:#0d1117;border:1px solid var(--line);border-radius:8px;padding:9px;text-align:center}
 .kpi .n{font-size:17px;font-weight:700}.kpi .l{font-size:9px;color:var(--dim);letter-spacing:.3px}
 .checks{font:11px/1.6 ui-monospace,monospace;margin-top:8px}
-video#cam{width:100%;max-width:320px;border-radius:9px;border:1px solid var(--line);background:#000}
+video#cam{width:100%;max-width:320px;border-radius:9px;border:1px solid var(--line);background:#000;display:block}
+.camstage{position:relative;display:inline-block;max-width:320px;width:100%}
+.flipbtn{position:absolute;top:8px;right:8px;width:40px;height:40px;min-height:40px;
+ border-radius:50%;background:#000b;color:#fff;border:1px solid #ffffff33;font-size:17px;
+ padding:0;line-height:38px;text-align:center;cursor:pointer}
 #grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(66px,1fr));gap:6px;margin-top:10px}
 .cell{position:relative;border:1px solid var(--line);border-radius:7px;overflow:hidden;
  line-height:0;background:#0d1117}
@@ -83,6 +87,9 @@ code{background:#1f2630;padding:1.5px 5px;border-radius:4px;font-size:12px;font-
 #targets{display:flex;gap:12px;flex-wrap:wrap}
 #targets label{color:var(--tx);font-size:13px}
 a{color:var(--blue)}
+.steps{background:var(--card);border:1px solid var(--line);border-radius:9px;
+ padding:9px 12px;margin:13px 0 2px;font-size:12.5px}
+.steps.live{border-color:#2b6a3f}
 </style></head><body>
 
 <h1>AI Déjà Vu Studio <span class="pill">train on your own examples</span></h1>
@@ -91,6 +98,8 @@ then run new inputs through it — every prediction fires a switchable
 <code>onMatched</code> / <code>onNotMatched</code> action.</div>
 <div class="sub">Everything is local: samples and models live in your browser's IndexedDB.
 Nothing is uploaded. <a href="./">← the shapes demo</a></div>
+
+<div id="steps" class="steps"></div>
 
 <h2>1 · Collect samples</h2>
 <div class="card">
@@ -115,7 +124,11 @@ Nothing is uploaded. <a href="./">← the shapes demo</a></div>
         <input type="file" id="imgFile" accept="image/*" capture="environment" multiple hidden></label>
     </div>
     <div id="camWrap" style="display:none;margin-top:10px">
-      <video id="cam" playsinline muted></video>
+      <div class="camstage">
+        <video id="cam" playsinline muted></video>
+        <button id="flip" class="flipbtn" style="display:none"
+                title="switch camera" aria-label="Switch between front and back camera">⇄</button>
+      </div>
       <button id="shoot" class="shootbtn">Capture frame</button>
     </div>
   </div>
@@ -159,7 +172,7 @@ Nothing is uploaded. <a href="./">← the shapes demo</a></div>
 <h2>3 · Stored models <span class="pill">IndexedDB</span></h2>
 <div class="card">
   <div class="row">
-    <select id="modelSel" style="flex:1;min-width:170px"></select>
+    <select id="modelSel" style="flex:1;min-width:170px" aria-label="Saved models"></select>
     <button id="loadBtn" class="sec">Load</button>
     <button id="exportBtn" class="sec">Export JSON</button>
   </div>
@@ -173,7 +186,7 @@ Nothing is uploaded. <a href="./">← the shapes demo</a></div>
       <label>match when predicted label is</label>
       <div id="targets" style="margin:6px 0 10px"><span class="dim">train a model first</span></div>
       <label>and confidence ≥ <b id="thrLbl" class="b">70%</b></label>
-      <input type="range" id="thr" min="0" max="100" value="70" style="width:100%">
+      <input type="range" id="thr" min="0" max="100" value="70" style="width:100%" aria-label="Confidence threshold percent">
       <label>cooldown per branch (ms) <input type="number" id="cool" value="0" min="0" step="500"></label>
     </div>
     <div>
@@ -198,7 +211,7 @@ Nothing is uploaded. <a href="./">← the shapes demo</a></div>
           <option value="POST" selected>POST</option>
           <option value="GET">GET</option>
         </select></label>
-      <input type="text" id="hookUrl" placeholder="https://example.com/hook"
+      <input type="text" id="hookUrl" placeholder="https://example.com/hook" aria-label="Webhook URL"
         style="width:100%;margin-top:5px">
       <div class="dim" style="font-size:11px;margin-top:5px">
         Cross-origin endpoints need CORS. Failures are logged, never thrown.</div>

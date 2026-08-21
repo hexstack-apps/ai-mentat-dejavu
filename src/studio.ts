@@ -68,6 +68,10 @@ let project = 'default';
 let active: { rec: StoredModel; pipe: Pipeline } | null = null;
 let config: ActionConfig = defaultConfig([]);
 let stream: MediaStream | null = null;
+/** Which camera to request next; flipped by the switch button. */
+let facing: 'environment' | 'user' = 'environment';
+/** Cameras the device reports, once permission has been granted. */
+let videoInputs: MediaDeviceInfo[] = [];
 let recorder: MediaRecorder | null = null;
 let meterTimer: number | null = null;
 
@@ -143,6 +147,33 @@ function deviceError(e: any): string {
 }
 
 /**
+ * One line saying what unblocks the next action.
+ *
+ * ponytail rung 2: steps 1 and 2 would have duplicated #captureHint and
+ * #trainability, which already sit beside the controls they describe. The only
+ * state NOT visible anywhere was "is a model loaded, and what will it do" — so
+ * that is all this renders, and it reads `active`/`config` directly instead of
+ * re-querying IndexedDB on every keystroke.
+ */
+function syncSteps() {
+  const el = document.getElementById('steps');
+  if (!el) return;
+  if (!active) {
+    el.className = 'steps';
+    el.innerHTML = '<span class="dim">No model yet — collect samples below, then Train. ' +
+                   'Classifying and actions unlock after that.</span>';
+    return;
+  }
+  const t = config.targets.length ? config.targets.join(', ') : 'none picked';
+  el.className = 'steps live';
+  el.innerHTML =
+    `<b>${active.rec.classes.join(' / ')}</b>` +
+    `<span class="dim"> · ${active.rec.extractor} · match on <b>${t}</b> ` +
+    `at ${Math.round(config.threshold * 100)}% · ` +
+    `${config.onMatched}/${config.onNotMatched}</span>`;
+}
+
+/**
  * Enable only what can actually work right now.
  *
  * The first version left Capture/Record/continuous enabled with no camera, no
@@ -157,6 +188,11 @@ function syncControls() {
   $<HTMLButtonElement>('rec').disabled = !(hasStream && hasLabel);
   $<HTMLButtonElement>('camOff').disabled = !hasStream;
   $<HTMLButtonElement>('micOff').disabled = !hasStream;
+  // The flip button lives over the video, so it must never be usable (or even
+  // present) without a running camera.
+  const flip = $<HTMLButtonElement>('flip');
+  flip.disabled = !hasStream;
+  if (!hasStream) flip.style.display = 'none';
   $<HTMLButtonElement>('runBtn').disabled = !hasModel;
   $<HTMLButtonElement>('loop').disabled = !hasModel;
   $<HTMLButtonElement>('exportBtn').disabled = !$<HTMLSelectElement>('modelSel').value;
@@ -168,20 +204,58 @@ function syncControls() {
     : !hasLabel ? 'type a label to start collecting'
     : 'ready to capture';
   $('captureHint').textContent = hint;
+  syncSteps();
 }
 
 // ---------------------------------------------------------------- capture
 async function startCamera() {
   await stopCapture();
-  stream = await navigator.mediaDevices.getUserMedia({
-    video: { facingMode: 'environment', width: { ideal: 640 } }, audio: false,
-  });
+  // Ask for the preferred camera, but do NOT use `exact`: on a single-camera
+  // device an exact facingMode fails outright, whereas `ideal` degrades to
+  // whatever exists. Fall back to bare video for the same reason.
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({
+      video: { facingMode: facing, width: { ideal: 640 } }, audio: false,
+    });
+  } catch (e: any) {
+    if (e?.name === 'OverconstrainedError' || e?.name === 'NotFoundError') {
+      stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
+    } else { throw e; }
+  }
+
   const v = $<HTMLVideoElement>('cam');
   v.srcObject = stream;
+  // Mirror the selfie view: users expect a mirror, and an un-mirrored front
+  // camera feels broken. The CAPTURED frame is un-mirrored on purpose so the
+  // stored sample matches what the lens actually saw.
+  v.style.transform = facing === 'user' ? 'scaleX(-1)' : '';
   await v.play();
+
+  // Labels are only populated after permission is granted, so enumerate now.
+  try {
+    videoInputs = (await navigator.mediaDevices.enumerateDevices())
+      .filter(d => d.kind === 'videoinput');
+  } catch { videoInputs = []; }
+  $('flip').style.display = videoInputs.length > 1 ? '' : 'none';
+
+  const track = stream.getVideoTracks()[0];
+  const actual = track?.getSettings?.().facingMode ?? facing;
   $('camWrap').style.display = '';
   syncControls();
-  log('camera on', 'g');
+  log(`camera on (${actual === 'user' ? 'front' : 'back'}${
+    videoInputs.length > 1 ? `, ${videoInputs.length} available` : ''})`, 'g');
+}
+
+/** Flip between front and back, restarting the stream. */
+async function flipCamera() {
+  facing = facing === 'environment' ? 'user' : 'environment';
+  try {
+    await startCamera();
+  } catch (e: any) {
+    log(`could not switch camera: ${deviceError(e)}`, 'r');
+    facing = facing === 'environment' ? 'user' : 'environment';   // revert
+    syncControls();
+  }
 }
 
 async function startMic() {
@@ -214,6 +288,7 @@ async function stopCapture() {
   if (stream) { stream.getTracks().forEach(t => t.stop()); stream = null; }
   $('camWrap').style.display = 'none';
   $('micWrap').style.display = 'none';
+  $('flip').style.display = 'none';
   syncControls();
 }
 
@@ -231,6 +306,17 @@ function recordClip(ms: number): Promise<Blob> {
     mr.start();
     setTimeout(() => { if (mr.state !== 'inactive') mr.stop(); }, ms);
   });
+}
+
+/** Horizontally flip a canvas (front camera preview is mirrored, the file is not). */
+function unmirror(src: HTMLCanvasElement): HTMLCanvasElement {
+  const cv = document.createElement('canvas');
+  cv.width = src.width; cv.height = src.height;
+  const cx = cv.getContext('2d')!;
+  cx.translate(cv.width, 0);
+  cx.scale(-1, 1);
+  cx.drawImage(src, 0, 0);
+  return cv;
 }
 
 function canvasToBlob(cv: HTMLCanvasElement): Promise<Blob> {
@@ -367,6 +453,9 @@ async function train() {
       `test ${Number.isNaN(testAcc) ? 'n/a' : pct(testAcc)}`, 'g');
   renderMetrics(rec, cm, checks, labels);
   renderTargets(labels);
+  // On a phone the metrics render far below the fold; without this the button
+  // appears to do nothing.
+  $('metrics').scrollIntoView({ behavior: 'smooth', block: 'start' });
   await refreshModels();
   syncControls();
 }
@@ -458,7 +547,7 @@ async function renderEvents() {
         `<td class="${e.matched ? 'g' : 'dim'}">${e.matched ? 'MATCH' : '—'}</td>` +
         `<td>${e.predicted}</td><td>${pct(e.confidence)}</td>` +
         `<td class="dim">${e.delivered}</td></tr>`).join('')
-    : '<tr><td colspan="5" class="dim">no events yet</td></tr>';
+    : '<tr><td colspan="5" class="dim">no events yet — classify something in step 5</td></tr>';
 }
 
 async function refreshModels() {
@@ -526,14 +615,31 @@ export async function boot() {
   $('shoot').addEventListener('click', async () => {
     const v = $<HTMLVideoElement>('cam');
     if (!stream) { log('turn the camera on first', 'r'); return; }
-    if (!v.videoWidth) { log('camera still starting — try again in a moment', 'o'); return; }
     if (!$<HTMLInputElement>('label').value.trim()) {
       log('pick or type a label first', 'r'); return;
     }
-    const s = videoToSurface(v);
-    const blob = await canvasToBlob(s as unknown as HTMLCanvasElement);
-    await addSample(blob, 'camera', $<HTMLInputElement>('label').value.trim());
+    // readyState >= 2 (HAVE_CURRENT_DATA) means there is a decodable frame.
+    // videoWidth alone can be non-zero before the first frame arrives, which
+    // produced blank captures.
+    if (!v.videoWidth || v.readyState < 2) {
+      log('camera still starting — try again in a moment', 'o'); return;
+    }
+    try {
+      // Un-mirror the front camera so the SAVED frame matches the real scene,
+      // even though the preview is mirrored for the user's benefit.
+      const surf = videoToSurface(v);
+      const cv = surf as unknown as HTMLCanvasElement;
+      const out = facing === 'user' ? unmirror(cv) : cv;
+      const blob = await canvasToBlob(out);
+      if (!blob || blob.size < 256) { log('captured an empty frame — try again', 'r'); return; }
+      await addSample(blob, facing === 'user' ? 'camera-front' : 'camera',
+                      $<HTMLInputElement>('label').value.trim());
+    } catch (e: any) {
+      log('capture failed: ' + (e?.message ?? e), 'r');
+    }
   });
+
+  $('flip').addEventListener('click', () => { flipCamera(); });
   $('imgFile').addEventListener('change', async e => {
     const files = (e.target as HTMLInputElement).files;
     if (!files) return;
@@ -611,6 +717,12 @@ export async function boot() {
     a.click();
   });
   $('clearSamples').addEventListener('click', async () => {
+    const counts = await samples.labels(project);
+    const total = Object.values(counts).reduce((a, b) => a + b, 0);
+    if (total > 0 && !confirm(
+        `Delete all ${total} sample(s) in "${project}"? This cannot be undone.`)) {
+      return;
+    }
     const n = await samples.clearProject(project);
     log(`cleared ${n} sample(s) from "${project}"`, 'o');
     await refreshSamples();
