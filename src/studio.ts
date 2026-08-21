@@ -17,6 +17,7 @@ import { dispatch, defaultConfig, type ActionConfig, type Sink } from './actions
 import { embedPhoto, PHOTO_DIM, fileToSurface, videoToSurface } from './photo.js';
 import { embedAudio, AUDIO_DIM, decodeAudioFile, rmsDb, resample, toMono } from './audio.js';
 import type { Surface } from './dataset.js';
+import { loadBackbone, backboneReady } from './backbone.js';
 
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
 const pct = (v: number) => `${(v * 100).toFixed(1)}%`;
@@ -28,10 +29,38 @@ const log = (m: string, cls = '') => {
   logEl.scrollTop = logEl.scrollHeight;
 };
 
-const EXTRACTOR: Record<Modality, { name: string; dim: number }> = {
-  image: { name: 'photo', dim: PHOTO_DIM },
-  audio: { name: 'mel', dim: AUDIO_DIM },
+/**
+ * Available extractors per modality. 'dinov2' is a pretrained backbone: far
+ * better generalisation from few examples, ~400x slower per image, and needs a
+ * one-time ~23 MB download. The UI states that trade rather than hiding it.
+ */
+const EXTRACTORS_BY_MODALITY: Record<Modality, { name: string; dim: number; label: string }[]> = {
+  image: [
+    { name: 'photo', dim: PHOTO_DIM, label: `fast hand-built (${PHOTO_DIM}-d, ~5 ms)` },
+    { name: 'dinov2', dim: 384, label: 'DINOv2 pretrained (384-d, ~2 s, 23 MB)' },
+  ],
+  audio: [
+    { name: 'mel', dim: AUDIO_DIM, label: `log-mel (${AUDIO_DIM}-d, ~20 ms)` },
+  ],
 };
+
+/** Currently selected extractor name, per modality. */
+const chosen: Record<Modality, string> = { image: 'photo', audio: 'mel' };
+
+function currentExtractor(): { name: string; dim: number; label: string } {
+  const list = EXTRACTORS_BY_MODALITY[modality];
+  return list.find(e => e.name === chosen[modality]) ?? list[0];
+}
+
+/** Back-compat shim: code below used EXTRACTOR[modality].name */
+const EXTRACTOR = new Proxy({} as Record<Modality, { name: string; dim: number }>, {
+  get: (_t, k: string) => {
+    const m = k as Modality;
+    const list = EXTRACTORS_BY_MODALITY[m];
+    const e = list.find(x => x.name === chosen[m]) ?? list[0];
+    return { name: e.name, dim: e.dim };
+  },
+});
 
 let modality: Modality = 'image';
 let project = 'default';
@@ -47,7 +76,13 @@ async function featurise(s: Sample): Promise<Vec> {
   if (s.vecs?.[ex]) return Float64Array.from(s.vecs[ex]);
   let v: Vec;
   if (s.modality === 'image') {
-    v = embedPhoto(await fileToSurface(s.blob));
+    const surf = await fileToSurface(s.blob);
+    if (ex === 'dinov2') {
+      const bb = await loadBackbone(m => log(m));
+      v = await bb.embed(surf);
+    } else {
+      v = embedPhoto(surf);
+    }
   } else {
     const { samples: pcm, sampleRate } = await decodeAudioFile(s.blob);
     v = embedAudio(pcm, sampleRate);
@@ -55,6 +90,15 @@ async function featurise(s: Sample): Promise<Vec> {
   s.vecs = { ...(s.vecs ?? {}), [ex]: Array.from(v).map(x => +x.toFixed(6)) };
   if (s.id !== undefined) await samples.update(s);   // cache so retrain is fast
   return v;
+}
+
+/** Embed one image surface with whichever extractor the model was trained on. */
+async function embedFor(extractor: string, surf: Surface): Promise<Vec> {
+  if (extractor === 'dinov2') {
+    const bb = await loadBackbone(m => log(m));
+    return bb.embed(surf);
+  }
+  return embedPhoto(surf);
 }
 
 // ---------------------------------------------------------------- capture
@@ -368,8 +412,26 @@ export async function boot() {
   restoreConfig();
   syncConfig();
 
+  const renderExtractorChoices = () => {
+    const list = EXTRACTORS_BY_MODALITY[modality];
+    $<HTMLSelectElement>('extractor').innerHTML = list.map(e =>
+      `<option value="${e.name}"${e.name === chosen[modality] ? ' selected' : ''}>${e.label}</option>`).join('');
+    $<HTMLSelectElement>('extractor').disabled = list.length < 2;
+  };
+  $('extractor').addEventListener('change', async () => {
+    chosen[modality] = $<HTMLSelectElement>('extractor').value;
+    const e = currentExtractor();
+    log(`extractor: ${e.label}`);
+    if (e.name === 'dinov2' && !backboneReady()) {
+      log('first training run will download the backbone (~23 MB, then cached)', 'o');
+    }
+    await refreshSamples();   // duplicate/vector state is per-extractor
+  });
+  renderExtractorChoices();
+
   $('modality').addEventListener('change', async () => {
     modality = $<HTMLSelectElement>('modality').value as Modality;
+    renderExtractorChoices();
     await stopCapture();
     $('imgTools').style.display = modality === 'image' ? '' : 'none';
     $('audTools').style.display = modality === 'audio' ? '' : 'none';
@@ -467,10 +529,10 @@ export async function boot() {
   $('runBtn').addEventListener('click', async () => {
     if (!active) return;
     try {
-      if (active.rec.extractor === 'photo') {
+      if (active.rec.extractor === 'photo' || active.rec.extractor === 'dinov2') {
         const v = $<HTMLVideoElement>('cam');
         if (stream && v.videoWidth) {
-          await runInference(embedPhoto(videoToSurface(v)), 'camera');
+          await runInference(await embedFor(active.rec.extractor, videoToSurface(v)), 'camera');
         } else { log('start the camera, or use "test a file" below', 'o'); }
       } else {
         if (!stream) { log('start the microphone first', 'o'); return; }
@@ -487,8 +549,8 @@ export async function boot() {
     const f = (e.target as HTMLInputElement).files?.[0];
     if (!f || !active) return;
     try {
-      if (active.rec.extractor === 'photo') {
-        await runInference(embedPhoto(await fileToSurface(f)), 'file');
+      if (active.rec.extractor === 'photo' || active.rec.extractor === 'dinov2') {
+        await runInference(await embedFor(active.rec.extractor, await fileToSurface(f)), 'file');
       } else {
         const { samples: pcm, sampleRate } = await decodeAudioFile(f);
         await runInference(embedAudio(pcm, sampleRate), 'file');
@@ -508,16 +570,21 @@ export async function boot() {
       return;
     }
     if (!active) { log('train or load a model first', 'r'); return; }
-    if (active.rec.extractor !== 'photo') {
+    if (active.rec.extractor === 'mel') {
       log('continuous mode is image-only for now (audio needs fixed clips)', 'o');
       return;
+    }
+    if (active.rec.extractor === 'dinov2') {
+      log('note: DINOv2 takes ~2 s per frame — set the interval accordingly', 'o');
     }
     if (!stream) { log('start the camera first', 'o'); return; }
     btn.textContent = 'Stop continuous'; btn.classList.add('on');
     log('continuous mode on — actions will fire on every frame that matches', 'g');
     loopTimer = window.setInterval(async () => {
       const v = $<HTMLVideoElement>('cam');
-      if (v.videoWidth) await runInference(embedPhoto(videoToSurface(v)), 'live');
+      if (v.videoWidth) {
+        await runInference(await embedFor(active!.rec.extractor, videoToSurface(v)), 'live');
+      }
     }, Math.max(300, +$<HTMLInputElement>('loopMs').value));
   });
 

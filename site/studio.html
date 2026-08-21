@@ -83,6 +83,9 @@ Nothing is uploaded. <a href="./">← the shapes demo</a></div>
         <option value="audio">sound (mic / files)</option>
       </select></label>
     <label>project <input type="text" id="project" value="default" style="width:110px"></label>
+  </div>
+  <div class="row" style="margin-top:8px">
+    <label>features <select id="extractor" style="max-width:100%"></select></label>
     <label>label <input type="text" id="label" placeholder="e.g. yes" style="width:110px"></label>
   </div>
 
@@ -219,7 +222,15 @@ Nothing is uploaded. <a href="./">← the shapes demo</a></div>
   add examples, type <code>no</code>, add examples. Three or more labels work the same way —
   aim for at least 3 examples each, and keep the counts roughly balanced (the trainability
   line warns you when they are not).</p>
-  <p style="margin:0 0 9px"><b>Two extractors, chosen by modality.</b> Images use a
+  <p style="margin:0 0 9px"><b>Two feature options for images.</b> The fast hand-built
+  descriptor (116-d, ~5 ms) needs no download and works well when your classes differ in
+  colour, layout or texture. <b>DINOv2</b> is a real pretrained backbone (384-d, ~2 s per
+  image, one-time ~23 MB download, then cached by the browser) — the same idea as
+  Teachable Machine's frozen MobileNet, and much better at generalising from only a
+  handful of examples of real-world objects. Pick it from the <i>features</i> dropdown
+  before training. Feature vectors are cached per extractor, so switching and retraining
+  does not re-download anything.</p>
+  <p style="margin:0 0 9px"><b>Extractors per modality.</b> Images use a
   116-d descriptor (colour grid, hue histogram, oriented gradients, edge density) — the
   shapes demo's 26-d extractor assumes one bright blob on a dark field and measurably
   underperforms on photos. Sound uses 200-d log-mel statistics: mean, spread, and a
