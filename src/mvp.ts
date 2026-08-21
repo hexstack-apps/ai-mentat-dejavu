@@ -15,6 +15,7 @@ import { runChecks, separationRatio } from './verify.js';
 import { store, hasIDB, type StoredModel, type MatchEvent } from './store.js';
 import { toRecord, fromRecord, toJSON, classify } from './serialize.js';
 import { dispatch, defaultConfig, type ActionConfig, type Sink } from './actions.js';
+import { renderVerdict } from './meters.js';
 
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
 const pct = (v: number) => `${(v * 100).toFixed(1)}%`;
@@ -171,11 +172,10 @@ async function runPrediction(surface: Surface, source: string) {
   };
   if (hasIDB) await store.addEvent(ev);
 
-  $('verdict').innerHTML =
-    `<span class="${out.matched ? 'g' : 'o'}" style="font-size:19px;font-weight:700">` +
-    `${out.matched ? '● MATCH' : '○ no match'}</span> ` +
-    `<b>${res.predicted}</b> <span class="dim">${pct(res.confidence)} · ${source} · ` +
-    `${out.delivered}${out.skipped ? ' (cooldown)' : ''}</span>`;
+  // Same animated meters as the Studio — the demo previously showed only a
+  // verdict line, so the two pages looked inconsistent.
+  renderVerdict($('verdict'), rec.classes, res, out, source,
+                config.threshold, config.targets);
   $('payload').textContent = JSON.stringify(out.payload, null, 2);
   await renderEvents();
 }

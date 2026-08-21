@@ -28,6 +28,7 @@ const studioTs = read('../src/studio.ts');
 const studioHtml = read('../site/studio.html');
 const mvpTs = read('../src/mvp.ts');
 const mvpHtml = read('../site/index.html');
+const metersTs = read('../src/meters.ts');
 
 // ---------------------------------------------------------------- 4. no null $()
 function idsUsed(src: string): string[] {
@@ -147,22 +148,35 @@ function idsDefined(html: string): Set<string> {
 
 // ---------------------------------------------------------------- meters
 {
-  check('probability meters are rendered by a dedicated function',
-        studioTs.includes('function renderVerdict('));
+  check('meters live in ONE shared module',
+        metersTs.includes('export function renderVerdict('),
+        'both pages must use the same implementation');
+  check('studio imports the shared meters',
+        studioTs.includes("from './meters.js'") &&
+        !studioTs.includes('function renderVerdict('),
+        'no local copy left behind');
+  check('the shapes demo also renders meters',
+        mvpTs.includes("from './meters.js'") && mvpTs.includes('renderVerdict('),
+        'the demo previously showed only a verdict line');
   check('meter nodes are REUSED so widths animate',
-        studioTs.includes("bars.dataset.classes !== classes.join('|')") &&
-        studioTs.includes("fill.style.width"),
+        metersTs.includes("bars.dataset.classes !== classes.join('|')") &&
+        metersTs.includes('fill.style.width'),
         'rebuilding innerHTML restarts the element and kills the transition');
-  check('meters have a CSS width transition',
-        /\.bfill\{[^}]*transition:width/.test(studioHtml));
-  check('winner and match are visually distinct',
-        studioHtml.includes('.bfill.win') && studioHtml.includes('.bfill.hit') &&
-        studioTs.includes("' hit'") && studioTs.includes("' win'"),
-        'colour should show WHY it matched, not just which is largest');
+  for (const [name, html] of [['studio', studioHtml], ['demo', mvpHtml]] as const) {
+    check(`${name} page has the meter CSS`,
+          /\.bfill\{[^}]*transition:width/.test(html) &&
+          html.includes('.bfill.win') && html.includes('.bfill.hit'),
+          'markup without the styles renders as unstyled rows');
+  }
   check('threshold marker drawn on target classes only',
-        studioTs.includes("thr.style.left") && studioTs.includes("isTarget ? '' : 'none'"));
+        metersTs.includes('thr.style.left') && metersTs.includes("isTarget ? '' : 'none'"));
   check('percentages shown to one decimal',
-        studioTs.includes('(p * 100).toFixed(1)'));
+        metersTs.includes('(p * 100).toFixed(1)'));
+  check('studio-link CTA is readable, not a bare dark-on-dark link',
+        mvpHtml.includes('class="cta"') && /\.cta\{[^}]*background:var\(--blue\)/.test(mvpHtml),
+        'measured unreadable: default link blue on a dark card');
+  check('demo controls meet the tap target too',
+        /#classify[^{]*\{min-height:44px\}|\.row button[^{]*\{min-height:44px\}/.test(mvpHtml));
 }
 
 console.log(failed ? `\n${failed} FAILURE(S)` : '\nALL PASS');

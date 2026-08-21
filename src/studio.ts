@@ -17,6 +17,7 @@ import { dispatch, defaultConfig, type ActionConfig, type Sink } from './actions
 import { embedPhoto, PHOTO_DIM, fileToSurface, videoToSurface } from './photo.js';
 import { embedAudio, AUDIO_DIM, decodeAudioFile, rmsDb, resample, toMono } from './audio.js';
 import type { Surface } from './dataset.js';
+import { renderVerdict } from './meters.js';
 import { loadBackbone, backboneReady } from './backbone.js';
 
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
@@ -444,71 +445,9 @@ async function runInference(v: Vec, source: string) {
       delivered: out.delivered,
     });
   }
-  renderVerdict(rec.classes, res, out, source, config.threshold, config.targets);
+  renderVerdict($('verdict'), rec.classes, res, out, source, config.threshold, config.targets);
   $('payload').textContent = JSON.stringify(out.payload, null, 2);
   await renderEvents();
-}
-
-/**
- * Teachable-Machine-style probability meters.
- *
- * Bars are reused rather than re-created: replacing innerHTML every frame restarts the
- * element, so the CSS width transition never runs and the display looks static.
- * Keeping the nodes and only writing `style.width` lets the browser animate, which
- * matters in continuous mode where predictions arrive every few hundred ms.
- */
-function renderVerdict(
-  classes: string[],
-  res: { predicted: string; confidence: number; probs: number[] },
-  out: { matched: boolean; delivered: string; skipped?: string },
-  source: string,
-  threshold: number,
-  targets: string[],
-) {
-  const host = $('verdict');
-  let head = host.querySelector('.vhead') as HTMLElement | null;
-  let bars = host.querySelector('.bars') as HTMLElement | null;
-
-  // (re)build the skeleton only when the class list changes
-  if (!bars || bars.dataset.classes !== classes.join('|')) {
-    host.innerHTML =
-      `<div class="vhead"></div>` +
-      `<div class="bars" data-classes="${classes.join('|')}">` +
-      classes.map(c =>
-        `<div class="brow" data-c="${c}">` +
-        `<span class="bname">${c}</span>` +
-        `<i class="btrack"><b class="bfill"></b><u class="bthr"></u></i>` +
-        `<em class="bval">0%</em></div>`).join('') +
-      `</div>`;
-    head = host.querySelector('.vhead') as HTMLElement;
-    bars = host.querySelector('.bars') as HTMLElement;
-  }
-
-  head!.innerHTML =
-    `<span class="${out.matched ? 'g' : 'o'}" style="font-size:18px;font-weight:700">` +
-    `${out.matched ? '● MATCH' : '○ no match'}</span> <b>${res.predicted}</b> ` +
-    `<span class="dim">${pct(res.confidence)} · ${source} · ${out.delivered}` +
-    `${out.skipped ? ' (cooldown)' : ''}</span>`;
-
-  classes.forEach((c, i) => {
-    const row = bars!.querySelector(`.brow[data-c="${c}"]`) as HTMLElement;
-    if (!row) return;
-    const p = res.probs[i];
-    const fill = row.querySelector('.bfill') as HTMLElement;
-    const val = row.querySelector('.bval') as HTMLElement;
-    const thr = row.querySelector('.bthr') as HTMLElement;
-    fill.style.width = `${(p * 100).toFixed(1)}%`;
-    val.textContent = `${(p * 100).toFixed(1)}%`;
-    // colour tells you WHY it matched: winner + target + over threshold
-    const isWinner = c === res.predicted;
-    const isTarget = targets.includes(c);
-    fill.className = 'bfill' + (isWinner && isTarget && p >= threshold ? ' hit'
-                              : isWinner ? ' win' : '');
-    row.classList.toggle('target', isTarget);
-    // the threshold marker only means something for target classes
-    thr.style.display = isTarget ? '' : 'none';
-    thr.style.left = `${(threshold * 100).toFixed(1)}%`;
-  });
 }
 
 async function renderEvents() {

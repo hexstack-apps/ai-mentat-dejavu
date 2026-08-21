@@ -46,6 +46,24 @@ code{background:#1f2630;padding:1.5px 5px;border-radius:4px;font-size:12px;font-
  border:1px solid var(--line);color:var(--dim);margin-left:6px;vertical-align:middle}
 #targets{display:flex;gap:12px;flex-wrap:wrap}
 #targets label{color:var(--tx);font-size:13px}
+.cta{display:inline-block;background:var(--blue);color:#05080c;font-weight:600;
+ font-size:14px;padding:11px 16px;border-radius:8px;text-decoration:none;min-height:44px;
+ line-height:22px}
+.vhead{margin-bottom:8px}
+.bars{margin-top:10px;font:12px ui-monospace,monospace}
+.brow{display:flex;align-items:center;gap:8px;margin:5px 0}
+.bname{width:78px;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;color:var(--dim)}
+.brow.target .bname{color:var(--tx);font-weight:600}
+.btrack{position:relative;flex:1;height:14px;background:#21262d;border-radius:7px;overflow:hidden}
+.bfill{position:absolute;left:0;top:0;bottom:0;width:0;border-radius:7px;background:#3d4653;
+ transition:width .28s cubic-bezier(.4,0,.2,1),background-color .2s}
+.bfill.win{background:var(--blue)}
+.bfill.hit{background:var(--grn)}
+.bthr{position:absolute;top:-2px;bottom:-2px;width:2px;background:var(--org);opacity:.85}
+.bval{font-style:normal;color:var(--tx);width:52px;text-align:right;font-variant-numeric:tabular-nums}
+/* tap targets: scoped to real controls so overlays keep their own size */
+.row button,#train,#load,#export,#del,#classify,#clrPad,#clearEv,#sample{min-height:44px}
+select,input[type=text],input[type=number]{min-height:40px}
 </style></head><body>
 
 <h1>AI Déjà Vu <span class="pill">MVP</span></h1>
@@ -53,7 +71,12 @@ code{background:#1f2630;padding:1.5px 5px;border-radius:4px;font-size:12px;font-
 <b>IndexedDB</b> and survives reloads. Every prediction fires a switchable
 <code>onMatched</code> / <code>onNotMatched</code> action — console, webhook, both or off.</div>
 <div class="sub">No server, no upload, no API key. Inference and training both run locally.</div>
-<div class="card" style="border-color:#58a6ff"><b>Train on your own examples →</b> <a href="studio.html">open the Studio</a> <span class="dim">— camera / image files for photos, mic / audio files for sounds, your own labels, live inference with the same webhook actions.</span></div>
+<div class="card" style="border-color:#58a6ff">
+  <b>Train on your own examples</b>
+  <div class="dim" style="font-size:13px;margin:5px 0 10px">Camera or image files for photos,
+  mic or audio files for sounds, your own labels, live inference with the same webhook actions.</div>
+  <a class="cta" href="studio.html">Open the Studio →</a>
+</div>
 
 <h2>1 · Train</h2>
 <div class="card">
