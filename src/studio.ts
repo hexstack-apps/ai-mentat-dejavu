@@ -519,7 +519,7 @@ function restoreConfig() {
 }
 
 // ---------------------------------------------------------------- inference
-async function runInference(v: Vec, source: string) {
+async function runInference(v: Vec, source: string, staleMs?: number) {
   if (!active) { log('train or load a model first', 'r'); return; }
   const { rec, pipe } = active;
   const res = classify(pipe, rec.classes, v);
@@ -534,7 +534,8 @@ async function runInference(v: Vec, source: string) {
       delivered: out.delivered,
     });
   }
-  renderVerdict($('verdict'), rec.classes, res, out, source, config.threshold, config.targets);
+  renderVerdict($('verdict'), rec.classes, res, out, source,
+                config.threshold, config.targets, staleMs);
   $('payload').textContent = JSON.stringify(out.payload, null, 2);
   await renderEvents();
 }
@@ -766,11 +767,11 @@ export async function boot() {
   });
 
   // ---- continuous mode: classify every N ms and let the actions fire
-  let loopTimer: number | null = null;
+  let loopStop: (() => void) | null = null;
   $('loop').addEventListener('click', async () => {
     const btn = $<HTMLButtonElement>('loop');
-    if (loopTimer) {
-      clearInterval(loopTimer); loopTimer = null;
+    if (loopStop) {
+      loopStop(); loopStop = null;
       btn.textContent = 'Start continuous'; btn.classList.remove('on');
       log('continuous mode off');
       return;
@@ -786,12 +787,36 @@ export async function boot() {
     if (!stream) { log('start the camera first', 'o'); return; }
     btn.textContent = 'Stop continuous'; btn.classList.add('on');
     log('continuous mode on — actions will fire on every frame that matches', 'g');
-    loopTimer = window.setInterval(async () => {
-      const v = $<HTMLVideoElement>('cam');
-      if (v.videoWidth) {
-        await runInference(await embedFor(active!.rec.extractor, videoToSurface(v)), 'live');
+
+    // Self-scheduling, NOT setInterval: an async callback on a fixed interval
+    // queues another run before the previous one finishes, so with a slow
+    // extractor the backlog grows without bound and every result describes a
+    // frame further in the past. Waiting for each pass, then sleeping the
+    // remainder of the interval, keeps the newest frame the one being judged.
+    let stop = false;
+    loopStop = () => { stop = true; };
+    const period = Math.max(300, +$<HTMLInputElement>('loopMs').value);
+    (async () => {
+      while (!stop) {
+        const started = performance.now();
+        const v = $<HTMLVideoElement>('cam');
+        if (v.videoWidth && v.readyState >= 2) {
+          try {
+            const grabbed = Date.now();
+            const vec = await embedFor(active!.rec.extractor, videoToSurface(v));
+            // Staleness = how old the frame was by the time we had an answer.
+            // Surfaced so a slow extractor is visible rather than silently
+            // reporting the past as the present.
+            await runInference(vec, 'live', Date.now() - grabbed);
+          } catch (e: any) {
+            log('live inference failed: ' + (e?.message ?? e), 'r');
+            stop = true;
+          }
+        }
+        const elapsed = performance.now() - started;
+        await new Promise(r => setTimeout(r, Math.max(0, period - elapsed)));
       }
-    }, Math.max(300, +$<HTMLInputElement>('loopMs').value));
+    })();
   });
 
   $('label').addEventListener('input', syncControls);

@@ -19,6 +19,8 @@ export function renderVerdict(
   source: string,
   threshold: number,
   targets: string[],
+  /** ms between grabbing the frame and having a verdict; shown when it matters */
+  staleMs?: number,
 ): void {
   const pct = (v: number) => `${(v * 100).toFixed(1)}%`;
   let head = host.querySelector('.vhead') as HTMLElement | null;
@@ -41,7 +43,9 @@ export function renderVerdict(
   head!.innerHTML =
     `<span class="${out.matched ? 'g' : 'o'}" style="font-size:18px;font-weight:700">` +
     `${out.matched ? '\u25cf MATCH' : '\u25cb no match'}</span> <b>${res.predicted}</b> ` +
-    `<span class="dim">${pct(res.confidence)} \u00b7 ${source} \u00b7 ${out.delivered}` +
+    `<span class="dim">${pct(res.confidence)} \u00b7 ${source}` +
+    `${staleMs !== undefined && staleMs > 250 ? ` \u00b7 <b class="o">${staleMs} ms old</b>` : ''}` +
+    ` \u00b7 ${out.delivered}` +
     `${out.skipped ? ' (cooldown)' : ''}</span>`;
 
   classes.forEach((c, i) => {

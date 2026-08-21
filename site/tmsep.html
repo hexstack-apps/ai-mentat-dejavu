@@ -1,0 +1,80 @@
+<!DOCTYPE html>
+<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>TM backbone separation</title>
+<style>body{background:#0d1117;color:#c9d1d9;font:13px/1.6 ui-monospace,monospace;padding:12px}
+#o{white-space:pre-wrap}.g{color:#3fb950}.r{color:#f85149}.o{color:#f0883e}</style></head>
+<body><div id="o">…</div>
+<script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-core@4.22.0/dist/tf-core.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-backend-webgl@4.22.0/dist/tf-backend-webgl.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-layers@4.22.0/dist/tf-layers.min.js"></script>
+<script type="module">
+const O=document.getElementById('o');
+const say=(m,c)=>{O.innerHTML+=`\n${c?`<span class=${c}>${m}</span>`:m}`;
+  window.__l=(window.__l||[]).concat(m);};
+window.__done=false;
+import { embedPhoto } from './dist/photo.js';
+import { Pipeline, norm2, mean } from './dist/linalg.js';
+try{
+  const tf=window.tf;
+  await tf.setBackend('webgl'); await tf.ready();
+  const URL='https://storage.googleapis.com/teachable-machine-models/'+
+    'mobilenet_v2_weights_tf_dim_ordering_tf_kernels_0.35_224_no_top/model.json';
+  const m=await tf.loadLayersModel(URL);
+  say('TM MobileNetV2 loaded','g');
+
+  // Same synthetic scenes used to justify the photo extractor, so the numbers
+  // are directly comparable to the 46.20 / 31.05 already measured.
+  function scene(kind,seed){
+    const S=224,cv=document.createElement('canvas');cv.width=cv.height=S;
+    const cx=cv.getContext('2d');let a=seed;
+    const rnd=()=>{a=(a*1103515245+12345)&0x7fffffff;return a/0x7fffffff;};
+    const id=cx.createImageData(S,S);
+    for(let y=0;y<S;y++)for(let x=0;x<S;x++){
+      const i=(y*S+x)*4;let r=110,g=110,b=110;
+      if(kind==='red-left'){ if(x<S/2){r=200;g=60;b=50;} }
+      else if(kind==='blue-right'){ if(x>=S/2){r=50;g=70;b=210;} }
+      else { const on=Math.floor(y/11)%2===0; r=g=b=on?210:40; }
+      const n=(rnd()-0.5)*26;
+      id.data[i]=Math.max(0,Math.min(255,r+n));id.data[i+1]=Math.max(0,Math.min(255,g+n));
+      id.data[i+2]=Math.max(0,Math.min(255,b+n));id.data[i+3]=255;
+    }
+    cx.putImageData(id,0,0);return cv;
+  }
+  const tmEmbed=(cv)=>tf.tidy(()=>{
+    const px=tf.expandDims(tf.sub(tf.div(tf.cast(tf.browser.fromPixels(cv),'float32'),127.5),1),0);
+    return tf.squeeze(tf.mean(m.predict(px),[1,2]));
+  });
+
+  const kinds=['red-left','blue-right','stripes'];
+  const Xtm=[],Xph=[],y=[];
+  for(let li=0;li<kinds.length;li++){
+    for(let i=0;i<8;i++){
+      const cv=scene(kinds[li],100+li*50+i);
+      const t=tmEmbed(cv); const arr=await t.data(); t.dispose();
+      Xtm.push(Float64Array.from(arr));
+      Xph.push(embedPhoto(cv));
+      y.push(li);
+    }
+    say(`embedded ${kinds[li]}`);
+  }
+  const sep=(X)=>{const w=[],b=[];
+    for(let i=0;i<X.length;i++)for(let j=i+1;j<X.length;j++)
+      (y[i]===y[j]?w:b).push(norm2(X[i],X[j]));
+    return mean(b)/mean(w);};
+  const rTM=sep(Xtm), rPH=sep(Xph);
+  say(`\nseparation ratio:`);
+  say(`  TM MobileNetV2 (1280-d): ${rTM.toFixed(2)}`, 'g');
+  say(`  hand-built photo (116-d): ${rPH.toFixed(2)}`, 'o');
+  // held-out accuracy with the SAME head
+  const split=(X)=>{const tr=[],te=[],ytr=[],yte=[];
+    X.forEach((v,i)=>{ if(i%4===0){te.push(v);yte.push(y[i]);} else {tr.push(v);ytr.push(y[i]);} });
+    return [tr,ytr,te,yte];};
+  for(const [name,X] of [['TM',Xtm],['photo',Xph]]){
+    const [tr,ytr,te,yte]=split(X);
+    const p=new Pipeline({epochs:300}).fit(tr,ytr,3);
+    say(`  ${name} held-out acc: ${(p.score(te,yte)*100).toFixed(1)}% (${te.length} test)`,'g');
+  }
+  window.__res={rTM,rPH};
+  window.__done=true; say('DONE','o');
+}catch(e){ say('FAILED: '+(e&&e.message||e),'r'); window.__err=String(e&&e.message||e); window.__done=true;}
+</script></body></html>

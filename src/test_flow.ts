@@ -217,5 +217,35 @@ function idsDefined(html: string): Set<string> {
   }
 }
 
+// ---------------------------------------------------------------- live loop
+{
+  // setInterval with an async callback queues another run before the previous
+  // finishes. With a slow extractor (TM CPU ~1188 ms, DINOv2 ~2000 ms) the
+  // backlog grows without bound and every action describes an older frame.
+  // The dB meter legitimately uses setInterval — it is a synchronous 100 ms UI
+  // tick that cannot overlap. What must never use it is an ASYNC callback.
+  check('no async callback on a fixed interval',
+        !/setInterval\(\s*async/.test(studioTs),
+        'async work on a fixed interval queues up and drifts behind reality');
+  check('the loop is self-scheduling',
+        /while \(!stop\)/.test(studioTs) &&
+        /period - elapsed/.test(studioTs),
+        'wait for each pass, then sleep the remainder of the period');
+  check('the loop can be stopped',
+        studioTs.includes('loopStop') && studioTs.includes('stop = true'));
+  check('a failed live pass stops the loop',
+        /live inference failed[\s\S]{0,80}stop = true/.test(studioTs),
+        'otherwise it spins on a broken extractor');
+  check('live frames wait for decodable data',
+        /v\.videoWidth && v\.readyState >= 2/.test(studioTs));
+  check('staleness is measured and surfaced',
+        studioTs.includes('Date.now() - grabbed') &&
+        metersTs.includes('ms old'),
+        'a slow extractor must not silently report the past as the present');
+  check('staleness hidden when negligible',
+        metersTs.includes('staleMs > 250'),
+        'no need to clutter the verdict at 5 ms');
+}
+
 console.log(failed ? `\n${failed} FAILURE(S)` : '\nALL PASS');
 process.exit(failed ? 1 : 0);
