@@ -122,6 +122,26 @@ function compatibility(rec: StoredModel): { ok: boolean; reason: string } {
 }
 
 /**
+ * Turn a getUserMedia rejection into something actionable.
+ *
+ * NotAllowedError is by far the most common on mobile and in embedded WebViews,
+ * where the host app may not hold the camera permission at all — so the useful
+ * advice is "use the upload button", not the raw message.
+ */
+function deviceError(e: any): string {
+  const n = e?.name ?? '';
+  if (n === 'NotAllowedError' || n === 'SecurityError') {
+    return 'permission denied — use the upload button instead ' +
+           '(on a phone it offers the camera too)';
+  }
+  if (n === 'NotFoundError' || n === 'OverconstrainedError') {
+    return 'no matching device found — try the upload button';
+  }
+  if (n === 'NotReadableError') return 'device busy in another app';
+  return String(e?.message ?? e).slice(0, 90);
+}
+
+/**
  * Enable only what can actually work right now.
  *
  * The first version left Capture/Record/continuous enabled with no camera, no
@@ -228,6 +248,7 @@ async function addSample(blob: Blob, source: string, label: string, durationMs?:
   await samples.add(s);
   log(`+1 "${label}" (${source})`, 'g');
   await refreshSamples();
+  syncControls();
 }
 
 // ---------------------------------------------------------------- sample list
@@ -423,16 +444,71 @@ async function runInference(v: Vec, source: string) {
       delivered: out.delivered,
     });
   }
-  $('verdict').innerHTML =
+  renderVerdict(rec.classes, res, out, source, config.threshold, config.targets);
+  $('payload').textContent = JSON.stringify(out.payload, null, 2);
+  await renderEvents();
+}
+
+/**
+ * Teachable-Machine-style probability meters.
+ *
+ * Bars are reused rather than re-created: replacing innerHTML every frame restarts the
+ * element, so the CSS width transition never runs and the display looks static.
+ * Keeping the nodes and only writing `style.width` lets the browser animate, which
+ * matters in continuous mode where predictions arrive every few hundred ms.
+ */
+function renderVerdict(
+  classes: string[],
+  res: { predicted: string; confidence: number; probs: number[] },
+  out: { matched: boolean; delivered: string; skipped?: string },
+  source: string,
+  threshold: number,
+  targets: string[],
+) {
+  const host = $('verdict');
+  let head = host.querySelector('.vhead') as HTMLElement | null;
+  let bars = host.querySelector('.bars') as HTMLElement | null;
+
+  // (re)build the skeleton only when the class list changes
+  if (!bars || bars.dataset.classes !== classes.join('|')) {
+    host.innerHTML =
+      `<div class="vhead"></div>` +
+      `<div class="bars" data-classes="${classes.join('|')}">` +
+      classes.map(c =>
+        `<div class="brow" data-c="${c}">` +
+        `<span class="bname">${c}</span>` +
+        `<i class="btrack"><b class="bfill"></b><u class="bthr"></u></i>` +
+        `<em class="bval">0%</em></div>`).join('') +
+      `</div>`;
+    head = host.querySelector('.vhead') as HTMLElement;
+    bars = host.querySelector('.bars') as HTMLElement;
+  }
+
+  head!.innerHTML =
     `<span class="${out.matched ? 'g' : 'o'}" style="font-size:18px;font-weight:700">` +
     `${out.matched ? '● MATCH' : '○ no match'}</span> <b>${res.predicted}</b> ` +
     `<span class="dim">${pct(res.confidence)} · ${source} · ${out.delivered}` +
-    `${out.skipped ? ' (cooldown)' : ''}</span>` +
-    `<div class="bars">${rec.classes.map((c, i) =>
-      `<div><span>${c}</span><i style="width:${(res.probs[i] * 100).toFixed(0)}%"></i>` +
-      `<em>${(res.probs[i] * 100).toFixed(0)}%</em></div>`).join('')}</div>`;
-  $('payload').textContent = JSON.stringify(out.payload, null, 2);
-  await renderEvents();
+    `${out.skipped ? ' (cooldown)' : ''}</span>`;
+
+  classes.forEach((c, i) => {
+    const row = bars!.querySelector(`.brow[data-c="${c}"]`) as HTMLElement;
+    if (!row) return;
+    const p = res.probs[i];
+    const fill = row.querySelector('.bfill') as HTMLElement;
+    const val = row.querySelector('.bval') as HTMLElement;
+    const thr = row.querySelector('.bthr') as HTMLElement;
+    fill.style.width = `${(p * 100).toFixed(1)}%`;
+    val.textContent = `${(p * 100).toFixed(1)}%`;
+    // colour tells you WHY it matched: winner + target + over threshold
+    const isWinner = c === res.predicted;
+    const isTarget = targets.includes(c);
+    fill.className = 'bfill' + (isWinner && isTarget && p >= threshold ? ' hit'
+                              : isWinner ? ' win' : '');
+    row.classList.toggle('target', isTarget);
+    // the threshold marker only means something for target classes
+    thr.style.display = isTarget ? '' : 'none';
+    thr.style.left = `${(threshold * 100).toFixed(1)}%`;
+  });
 }
 
 async function renderEvents() {
@@ -503,8 +579,10 @@ export async function boot() {
   $('thr').addEventListener('input', syncConfig);
 
   // ---- image capture
-  $('camOn').addEventListener('click', () => startCamera().catch(e =>
-    log('camera failed: ' + (e?.message ?? e), 'r')));
+  $('camOn').addEventListener('click', () => startCamera().catch(e => {
+    log(`camera unavailable: ${deviceError(e)}`, 'r');
+    syncControls();                      // was left enabled after a failure
+  }));
   $('camOff').addEventListener('click', () => { stopCapture(); log('capture stopped'); });
   $('shoot').addEventListener('click', async () => {
     const v = $<HTMLVideoElement>('cam');
@@ -526,8 +604,10 @@ export async function boot() {
   });
 
   // ---- audio capture
-  $('micOn').addEventListener('click', () => startMic().catch(e =>
-    log('microphone failed: ' + (e?.message ?? e), 'r')));
+  $('micOn').addEventListener('click', () => startMic().catch(e => {
+    log(`microphone unavailable: ${deviceError(e)}`, 'r');
+    syncControls();
+  }));
   $('micOff').addEventListener('click', () => { stopCapture(); log('capture stopped'); });
   $('rec').addEventListener('click', async () => {
     const ms = +$<HTMLInputElement>('clipMs').value;

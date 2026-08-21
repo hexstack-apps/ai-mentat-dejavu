@@ -111,5 +111,59 @@ function idsDefined(html: string): Set<string> {
         'a warming-up camera is not the same error as no camera');
 }
 
+// ---------------------------------------------------------------- mobile
+{
+  // Camera and mic are commonly DENIED on mobile / in embedded WebViews
+  // (measured NotAllowedError for both), so upload is the essential path and
+  // the failure must be actionable rather than a raw DOMException message.
+  check('device errors are translated for humans',
+        studioTs.includes('function deviceError(') &&
+        studioTs.includes('NotAllowedError') &&
+        studioTs.includes('use the upload button'),
+        'raw "Permission denied" gives the user nothing to do');
+  check('a failed camera start re-syncs controls',
+        /camera unavailable[\s\S]{0,120}syncControls\(\)/.test(studioTs),
+        'Capture stayed enabled after the camera failed');
+  check('a failed mic start re-syncs controls',
+        /microphone unavailable[\s\S]{0,120}syncControls\(\)/.test(studioTs));
+  check('adding a sample re-syncs controls',
+        /await refreshSamples\(\);\s*\n\s*syncControls\(\);/.test(studioTs),
+        'the hint went stale/empty after an upload');
+  check('image input offers the phone camera',
+        /id="imgFile"[^>]*capture="environment"/.test(studioHtml),
+        'the upload fallback should reach the camera when getUserMedia cannot');
+  check('capture button sits under the video frame',
+        studioHtml.indexOf('id="shoot"') > studioHtml.indexOf('id="cam"') &&
+        studioHtml.indexOf('id="shoot"') < studioHtml.indexOf('</div>', studioHtml.indexOf('id="cam"')) + 400,
+        'aim then tap, instead of a button above the preview');
+  check('real controls meet a mobile tap target',
+        /\.row button[^{]*\{min-height:44px\}/.test(studioHtml),
+        'all controls measured 27-35px tall');
+  check('tap-target rule is scoped, not every button',
+        !/(^|\n)button\{min-height:44px\}/.test(studioHtml),
+        'min-height always beats height, so a blanket rule inflated the ' +
+        '22px thumbnail delete badge into a 44px oval over the preview');
+}
+
+// ---------------------------------------------------------------- meters
+{
+  check('probability meters are rendered by a dedicated function',
+        studioTs.includes('function renderVerdict('));
+  check('meter nodes are REUSED so widths animate',
+        studioTs.includes("bars.dataset.classes !== classes.join('|')") &&
+        studioTs.includes("fill.style.width"),
+        'rebuilding innerHTML restarts the element and kills the transition');
+  check('meters have a CSS width transition',
+        /\.bfill\{[^}]*transition:width/.test(studioHtml));
+  check('winner and match are visually distinct',
+        studioHtml.includes('.bfill.win') && studioHtml.includes('.bfill.hit') &&
+        studioTs.includes("' hit'") && studioTs.includes("' win'"),
+        'colour should show WHY it matched, not just which is largest');
+  check('threshold marker drawn on target classes only',
+        studioTs.includes("thr.style.left") && studioTs.includes("isTarget ? '' : 'none'"));
+  check('percentages shown to one decimal',
+        studioTs.includes('(p * 100).toFixed(1)'));
+}
+
 console.log(failed ? `\n${failed} FAILURE(S)` : '\nALL PASS');
 process.exit(failed ? 1 : 0);
