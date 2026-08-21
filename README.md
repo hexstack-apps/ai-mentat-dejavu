@@ -6,13 +6,7 @@ live inference where every prediction fires a switchable `onMatched` /
 
 No server, no upload, no API key. Training and inference both run locally.
 
-**Live:** https://hexstack.app/ai-dejavu/ · **Studio:** https://hexstack.app/ai-dejavu/studio
-
-Two pages:
-- **`/`** — the built-in shapes demo, showing why representation beats classifier.
-- **`/studio`** — train on **your own** examples: camera or image files for photos,
-  microphone or audio files for sounds, your own labels, then run new inputs
-  through the model with the same webhook/console actions.
+**Live:** https://ai-dejavu.pages.dev/ai-dejavu/
 
 ## Architecture
 
@@ -60,74 +54,6 @@ Rotating the *same square* moves its v1 embedding **further** than changing the
 shape does. Within-class variation exceeds between-class separation, so no amount
 of training can succeed. v2 measures gradient orientation *relative to the shape's
 centroid*, adds radial ring occupancy and pose-free scalars (compactness, extent).
-
-## Studio: your own examples
-
-| modality | capture | extractor | dims | per image |
-|---|---|---|---|---|
-| image | camera frame, image files | hand-built: colour grid + hue histogram + oriented gradients + edge density | 116 | ~5 ms |
-| image | same | **DINOv2-small pretrained** (optional) | 384 | ~2 s |
-| audio | mic clip (with dB meter), audio files | log-mel band mean/std + 3-segment time profile | 200 | ~20 ms |
-
-Pick the extractor from the *features* dropdown before training. DINOv2 is the
-same idea as Teachable Machine's frozen MobileNet — much better at generalising
-from a handful of real-world examples, at ~400x the cost per image. The runtime
-and weights load from CDNs (one-time ~23 MB, then browser-cached), so the
-deployed site stays ~174 KB.
-
-Inference always uses the extractor recorded **in the model**, never the current
-dropdown: the two vector spaces are incomparable, so a mismatch would produce
-confident nonsense.
-
-Labels are free-form strings, so a binary **yes / no** task is just two labels and
-multi-class needs no different UI. Guardrails:
-
-- **trainability** blocks <2 labels or <3 examples of any label, and warns above
-  5:1 imbalance instead of training a model that predicts the majority class.
-- **duplicate detection** flags samples with identical feature vectors and offers
-  one-click removal. Duplicates inflate the score silently — one in both splits
-  means testing on memorised data.
-- **25% per label held out** with a deterministic stratified split. Integrity
-  checks run only when the split is big enough to be meaningful; below that the
-  UI says the score is on training data rather than implying otherwise.
-
-Raw captures are stored alongside the cached vectors, so samples survive an
-extractor change and you can review what you actually recorded.
-
-### Why two image extractors
-
-The shapes demo's 26-d v2 extractor thresholds for **one bright blob on a dark
-field** and measures its radial profile — on a photograph there is no such blob,
-so it describes noise. Measured on photo-like input: the photo extractor scores
-**46.20** separation vs v2's **31.05**.
-
-### Audio normalisation, and a bug worth recording
-
-The first version subtracted each mel band's own mean over time. That forces
-every band's time-average to **zero**, so the mean and per-segment features were
-identically ~0 for any stationary sound — separation collapsed to **1.27**
-(300 vs 1200 Hz) and **1.14** (tone vs noise), with all signal surviving only in
-`std`. Subtracting a single **global** offset instead still cancels gain (log
-domain ⇒ multiplicative gain is additive) while preserving spectral shape across
-bands: **26.24** and **16.81**. Loudness invariance held — a 10× amplitude change
-moves the vector 15.47 while a pitch change moves it 42.91.
-
-## Versus Teachable Machine
-
-Both are *frozen extractor + trained softmax head* — TM's head is
-`dense → softmax` with categorical cross-entropy and Adam (checked in their
-source); this uses multinomial logistic regression, the same model class.
-
-**Still missing:** pose projects (TM uses PoseNet for 17 body keypoints);
-TFLite / Keras / Coral export; cloud hosting with a shareable model URL;
-tunable epochs / batch size / learning rate in the UI; and a pretrained audio
-backbone (TM builds on `speech-commands`, this uses raw log-mel DSP).
-
-**Added beyond TM:** actions on prediction — `onMatched` / `onNotMatched` with
-independent console/webhook sinks, threshold and multi-target rules, per-branch
-cooldown, and a persisted event log. TM stops at "here is the class". Plus the
-integrity checks, duplicate detection, the trainability guard, raw-capture
-storage, a headless CLI on the identical code path, and a ~1–15 KB model.
 
 ## Match rule
 
