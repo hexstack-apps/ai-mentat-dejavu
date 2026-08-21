@@ -6,7 +6,13 @@ live inference where every prediction fires a switchable `onMatched` /
 
 No server, no upload, no API key. Training and inference both run locally.
 
-**Live:** https://ai-dejavu.pages.dev/ai-dejavu/
+**Live:** https://hexstack.app/ai-dejavu/ · **Studio:** https://hexstack.app/ai-dejavu/studio
+
+Two pages:
+- **`/`** — the built-in shapes demo, showing why representation beats classifier.
+- **`/studio`** — train on **your own** examples: camera or image files for photos,
+  microphone or audio files for sounds, your own labels, then run new inputs
+  through the model with the same webhook/console actions.
 
 ## Architecture
 
@@ -54,6 +60,46 @@ Rotating the *same square* moves its v1 embedding **further** than changing the
 shape does. Within-class variation exceeds between-class separation, so no amount
 of training can succeed. v2 measures gradient orientation *relative to the shape's
 centroid*, adds radial ring occupancy and pose-free scalars (compactness, extent).
+
+## Studio: your own examples
+
+| modality | capture | extractor | dims |
+|---|---|---|---|
+| image | camera frame, image files | colour grid + hue histogram + oriented gradients + edge density | 116 |
+| audio | mic clip (with dB meter), audio files | log-mel band mean/std + 3-segment time profile | 200 |
+
+Labels are free-form strings, so a binary **yes / no** task is just two labels and
+multi-class needs no different UI. Guardrails:
+
+- **trainability** blocks <2 labels or <3 examples of any label, and warns above
+  5:1 imbalance instead of training a model that predicts the majority class.
+- **duplicate detection** flags samples with identical feature vectors and offers
+  one-click removal. Duplicates inflate the score silently — one in both splits
+  means testing on memorised data.
+- **25% per label held out** with a deterministic stratified split. Integrity
+  checks run only when the split is big enough to be meaningful; below that the
+  UI says the score is on training data rather than implying otherwise.
+
+Raw captures are stored alongside the cached vectors, so samples survive an
+extractor change and you can review what you actually recorded.
+
+### Why two image extractors
+
+The shapes demo's 26-d v2 extractor thresholds for **one bright blob on a dark
+field** and measures its radial profile — on a photograph there is no such blob,
+so it describes noise. Measured on photo-like input: the photo extractor scores
+**46.20** separation vs v2's **31.05**.
+
+### Audio normalisation, and a bug worth recording
+
+The first version subtracted each mel band's own mean over time. That forces
+every band's time-average to **zero**, so the mean and per-segment features were
+identically ~0 for any stationary sound — separation collapsed to **1.27**
+(300 vs 1200 Hz) and **1.14** (tone vs noise), with all signal surviving only in
+`std`. Subtracting a single **global** offset instead still cancels gain (log
+domain ⇒ multiplicative gain is additive) while preserving spectral shape across
+bands: **26.24** and **16.81**. Loudness invariance held — a 10× amplitude change
+moves the vector 15.47 while a pitch change moves it 42.91.
 
 ## Match rule
 
