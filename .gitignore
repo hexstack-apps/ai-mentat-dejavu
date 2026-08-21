@@ -13,6 +13,3 @@ probe*.mjs
 hooktest.mjs
 dinov2_result.json
 _scratch_probes/
-
-# esbuild output
-/electron-main.bundle.cjs
