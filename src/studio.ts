@@ -23,6 +23,8 @@ import { loadTmNet, tmReady, TM_DIM } from './tmnet.js';
 import { loadScNet, scReady, SC_DIM } from './scnet.js';
 import { startListening, isSilent, type Listener } from './listen.js';
 import { runSelfTest } from './selftest.js';
+import { exportScript } from './exporter.js';
+import { RUNTIME_PHOTO, RUNTIME_MEL } from './runtime-src.js';
 
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
 const pct = (v: number) => `${(v * 100).toFixed(1)}%`;
@@ -803,6 +805,26 @@ export async function boot() {
     a.download = `aidejavu-${rec.id}.json`;
     a.click();
   });
+  $('exportJs').addEventListener('click', async () => {
+    const id = $<HTMLSelectElement>('modelSel').value;
+    const rec = id ? await store.getModel(id) : active?.rec;
+    if (!rec) { log('no model selected', 'r'); return; }
+    const srcMap: Record<string, string | undefined> =
+      { photo: RUNTIME_PHOTO, mel: RUNTIME_MEL };
+    const js = exportScript(rec, {
+      extractorSource: srcMap[rec.extractor],
+      name: `detector-${rec.extractor}`,
+    });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(new Blob([js], { type: 'text/javascript' }));
+    a.download = `detector-${rec.extractor}-${rec.id}.js`;
+    a.click();
+    const selfContained = rec.extractor === 'photo' || rec.extractor === 'mel';
+    log(`exported ${(js.length / 1024).toFixed(1)} KB script` +
+        (selfContained ? ' — self-contained, runs in browser/node/bun'
+                       : ` — needs the ${rec.extractor} backbone at runtime`), 'g');
+  });
+
   $('clearSamples').addEventListener('click', async () => {
     const counts = await samples.labels(project);
     const total = Object.values(counts).reduce((a, b) => a + b, 0);
