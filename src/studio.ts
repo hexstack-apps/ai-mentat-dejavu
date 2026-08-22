@@ -21,6 +21,7 @@ import { renderVerdict } from './meters.js';
 import { loadBackbone, backboneReady } from './backbone.js';
 import { loadTmNet, tmReady, TM_DIM } from './tmnet.js';
 import { startListening, isSilent, type Listener } from './listen.js';
+import { runSelfTest } from './selftest.js';
 
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
 const pct = (v: number) => `${(v * 100).toFixed(1)}%`;
@@ -858,6 +859,16 @@ export async function boot() {
       }
       listener?.stop();
     })();
+  });
+
+  $('selftest').addEventListener('click', () => {
+    log('running label-mapping self test…');
+    const { lines, verdict } = runSelfTest();
+    for (const l of lines) {
+      if (l.name.startsWith('—')) { log(l.name + ' ' + l.detail, 'b'); continue; }
+      log(`  [${l.pass ? 'PASS' : 'FAIL'}] ${l.name} — ${l.detail}`, l.pass ? 'g' : 'r');
+    }
+    log(verdict, lines.every(l => l.pass) ? 'o' : 'r');
   });
 
   $('label').addEventListener('input', syncControls);
