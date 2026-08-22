@@ -38,22 +38,72 @@ const log = (m: string, cls = '') => {
  * better generalisation from few examples, ~400x slower per image, and needs a
  * one-time ~23 MB download. The UI states that trade rather than hiding it.
  */
-const EXTRACTORS_BY_MODALITY: Record<Modality, { name: string; dim: number; label: string }[]> = {
+/**
+ * Extractor catalogue.
+ *
+ * Every entry carries the DEVICE class it is sensible on and the TASK it suits,
+ * because the numbers alone mislead: DINOv3 has the best features here but is
+ * ~400x slower than the hand-built one, so "best" depends entirely on what you
+ * are running it on and what you are classifying.
+ *
+ * Device tiers, from measurements on a Redmi Note 12 Pro (mid-range 2022):
+ *   any     — runs everywhere including old tablets, no download
+ *   gpu     — needs working WebGL; falls back to CPU at ~17x the cost
+ *   desktop — 20+ MB download and seconds per image; fine on a laptop
+ *
+ * Everything listed exports real FEATURES. Two candidates were removed after
+ * measurement: MobileNetV4 and ResNet-18 ONNX exports expose only `logits`,
+ * which scored separation 1.40 / 1.53 and 51.7% accuracy — worse than the
+ * 5 ms hand-built extractor while costing a download.
+ */
+interface ExtractorSpec {
+  name: string;
+  dim: number;
+  /** Short name shown in the dropdown. */
+  title: string;
+  device: 'any' | 'gpu' | 'desktop';
+  /** What this is actually good at. */
+  task: string;
+  cost: string;
+}
+
+const EXTRACTORS_BY_MODALITY: Record<Modality, ExtractorSpec[]> = {
   image: [
-    { name: 'photo', dim: PHOTO_DIM, label: `fast hand-built (${PHOTO_DIM}-d, ~5 ms)` },
-    { name: 'tmnet', dim: TM_DIM,
-      label: `TM MobileNetV2 (${TM_DIM}-d, ~70 ms GPU, 1.6 MB)` },
-    { name: 'dinov2', dim: 384, label: 'DINOv2 pretrained (384-d, ~2 s, 23 MB)' },
+    { name: 'photo', dim: PHOTO_DIM, title: 'Colour & edges (built-in)',
+      device: 'any', task: 'scenes differing in colour, layout or texture',
+      cost: '~5 ms · no download' },
+    { name: 'tmnet', dim: TM_DIM, title: 'MobileNetV2 (Teachable Machine)',
+      device: 'gpu', task: 'everyday objects — the best all-rounder',
+      cost: '~70 ms · 1.6 MB' },
+    { name: 'dinov3', dim: 384, title: 'DINOv3 small (newest)',
+      device: 'desktop', task: 'fine distinctions, few examples',
+      cost: '~2 s · 21 MB' },
+    { name: 'dinov2', dim: 384, title: 'DINOv2 small (older)',
+      device: 'desktop', task: 'same as DINOv3; keep for existing models',
+      cost: '~2 s · 23 MB' },
   ],
   audio: [
-    { name: 'mel', dim: AUDIO_DIM, label: `log-mel (${AUDIO_DIM}-d, ~20 ms)` },
+    { name: 'mel', dim: AUDIO_DIM, title: 'Log-mel bands (built-in)',
+      device: 'any', task: 'claps, whistles, alarms, machine hum',
+      cost: '~5 ms · no download' },
   ],
 };
+
+const DEVICE_TAG: Record<ExtractorSpec['device'], string> = {
+  any: 'any device',
+  gpu: 'needs GPU',
+  desktop: 'desktop/laptop',
+};
+
+/** Dropdown text: what it is, where it runs, what it costs. */
+function extractorLabel(e: ExtractorSpec): string {
+  return `${e.title} — ${DEVICE_TAG[e.device]} · ${e.cost} · ${e.dim}-d`;
+}
 
 /** Currently selected extractor name, per modality. */
 const chosen: Record<Modality, string> = { image: 'photo', audio: 'mel' };
 
-function currentExtractor(): { name: string; dim: number; label: string } {
+function currentExtractor(): ExtractorSpec {
   const list = EXTRACTORS_BY_MODALITY[modality];
   return list.find(e => e.name === chosen[modality]) ?? list[0];
 }
@@ -99,8 +149,8 @@ async function featurise(s: Sample): Promise<Vec> {
 
 /** Embed one image surface with whichever extractor the model was trained on. */
 async function embedFor(extractor: string, surf: Surface): Promise<Vec> {
-  if (extractor === 'dinov2') {
-    const bb = await loadBackbone(m => log(m));
+  if (extractor === 'dinov2' || extractor === 'dinov3') {
+    const bb = await loadBackbone(extractor, m => log(m));
     return bb.embed(surf);
   }
   if (extractor === 'tmnet') {
@@ -116,7 +166,7 @@ async function embedFor(extractor: string, surf: Surface): Promise<Vec> {
 
 /** Extractors this page can actually run, per modality. */
 const RUNNABLE: Record<string, Modality> =
-  { photo: 'image', tmnet: 'image', dinov2: 'image', mel: 'audio' };
+  { photo: 'image', tmnet: 'image', dinov3: 'image', dinov2: 'image', mel: 'audio' };
 
 /** Is a stored model usable here, and if not, why? */
 function compatibility(rec: StoredModel): { ok: boolean; reason: string } {
@@ -585,15 +635,17 @@ export async function boot() {
   const renderExtractorChoices = () => {
     const list = EXTRACTORS_BY_MODALITY[modality];
     $<HTMLSelectElement>('extractor').innerHTML = list.map(e =>
-      `<option value="${e.name}"${e.name === chosen[modality] ? ' selected' : ''}>${e.label}</option>`).join('');
+      `<option value="${e.name}" title="Good for: ${e.task}"` +
+      `${e.name === chosen[modality] ? ' selected' : ''}>${extractorLabel(e)}</option>`).join('');
     $<HTMLSelectElement>('extractor').disabled = list.length < 2;
   };
   $('extractor').addEventListener('change', async () => {
     chosen[modality] = $<HTMLSelectElement>('extractor').value;
     const e = currentExtractor();
-    log(`extractor: ${e.label}`);
-    if (e.name === 'dinov2' && !backboneReady()) {
-      log('first training run will download the backbone (~23 MB, then cached)', 'o');
+    log(`extractor: ${e.title} (${DEVICE_TAG[e.device]}) — good for ${e.task}`);
+    if ((e.name === 'dinov2' || e.name === 'dinov3') && !backboneReady(e.name)) {
+      log(`first training run downloads ${e.cost.split('· ')[1]} (then cached); ` +
+          `on a phone prefer MobileNetV2`, 'o');
     }
     if (e.name === 'tmnet' && !tmReady()) {
       log("first run downloads Teachable Machine's MobileNetV2 (~1.6 MB, then cached)", 'o');
@@ -792,8 +844,8 @@ export async function boot() {
     }
     if (!active) { log('train or load a model first', 'r'); return; }
     const isAudio = active.rec.extractor === 'mel';
-    if (active.rec.extractor === 'dinov2') {
-      log('note: DINOv2 takes ~2 s per frame — set the interval accordingly', 'o');
+    if (active.rec.extractor === 'dinov2' || active.rec.extractor === 'dinov3') {
+      log(`note: ${active.rec.extractor} takes ~2 s per frame — raise the interval`, 'o');
     }
     if (!stream) {
       log(isAudio ? 'start the microphone first' : 'start the camera first', 'o');
