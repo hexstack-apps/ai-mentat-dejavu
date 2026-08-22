@@ -230,6 +230,10 @@ Nothing is uploaded. <a href="./">← the shapes demo</a></div>
       <input type="file" id="testFile" accept="image/*,audio/*" hidden></label>
     <button id="loop" class="sec">Start continuous</button>
     <label>every ms <input type="number" id="loopMs" value="1500" min="300" step="100"></label>
+    <label title="Audio only: windows quieter than this are reported as silence
+instead of being forced into the nearest label">silence gate dB
+      <input type="number" id="gate" value="-45" min="-90" max="0" step="5"
+             aria-label="Silence gate in decibels for continuous audio"></label>
   </div>
   <div id="verdict" style="margin-top:12px"><span class="dim">no prediction yet</span></div>
 </div>

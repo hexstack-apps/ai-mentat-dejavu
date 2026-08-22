@@ -20,6 +20,7 @@ import type { Surface } from './dataset.js';
 import { renderVerdict } from './meters.js';
 import { loadBackbone, backboneReady } from './backbone.js';
 import { loadTmNet, tmReady, TM_DIM } from './tmnet.js';
+import { startListening, isSilent, type Listener } from './listen.js';
 
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
 const pct = (v: number) => `${(v * 100).toFixed(1)}%`;
@@ -492,6 +493,12 @@ function renderTargets(labels: string[]) {
     i.addEventListener('change', syncConfig));
 }
 
+/** Silence gate in dBFS; below this a window is not classified. */
+function gateDb(): number {
+  const el = document.getElementById('gate') as HTMLInputElement | null;
+  return el ? +el.value : -45;
+}
+
 // ---------------------------------------------------------------- config
 function syncConfig() {
   config = {
@@ -783,14 +790,14 @@ export async function boot() {
       return;
     }
     if (!active) { log('train or load a model first', 'r'); return; }
-    if (active.rec.extractor === 'mel') {
-      log('continuous mode is image-only for now (audio needs fixed clips)', 'o');
-      return;
-    }
+    const isAudio = active.rec.extractor === 'mel';
     if (active.rec.extractor === 'dinov2') {
       log('note: DINOv2 takes ~2 s per frame — set the interval accordingly', 'o');
     }
-    if (!stream) { log('start the camera first', 'o'); return; }
+    if (!stream) {
+      log(isAudio ? 'start the microphone first' : 'start the camera first', 'o');
+      return;
+    }
     btn.textContent = 'Stop continuous'; btn.classList.add('on');
     log('continuous mode on — actions will fire on every frame that matches', 'g');
 
@@ -800,28 +807,56 @@ export async function boot() {
     // frame further in the past. Waiting for each pass, then sleeping the
     // remainder of the interval, keeps the newest frame the one being judged.
     let stop = false;
-    loopStop = () => { stop = true; };
     const period = Math.max(300, +$<HTMLInputElement>('loopMs').value);
+
+    // Audio taps the live stream ONCE into a rolling buffer, so consecutive
+    // windows can overlap and a sound on a boundary is never lost between clips.
+    let listener: Listener | null = null;
+    if (isAudio) {
+      const windowMs = Math.max(400, +$<HTMLInputElement>('clipMs').value);
+      listener = startListening(stream, windowMs);
+      log(`listening continuously (${windowMs} ms window, gate ${gateDb()} dB)`, 'g');
+    }
+    loopStop = () => { stop = true; listener?.stop(); listener = null; };
+
     (async () => {
       while (!stop) {
         const started = performance.now();
-        const v = $<HTMLVideoElement>('cam');
-        if (v.videoWidth && v.readyState >= 2) {
-          try {
-            const grabbed = Date.now();
-            const vec = await embedFor(active!.rec.extractor, videoToSurface(v));
-            // Staleness = how old the frame was by the time we had an answer.
-            // Surfaced so a slow extractor is visible rather than silently
-            // reporting the past as the present.
-            await runInference(vec, 'live', Date.now() - grabbed);
-          } catch (e: any) {
-            log('live inference failed: ' + (e?.message ?? e), 'r');
-            stop = true;
+        try {
+          if (isAudio && listener) {
+            const pcm = listener.snapshot();
+            if (pcm.length < 1024) {
+              // buffer still filling on the first pass
+            } else if (isSilent(pcm, gateDb())) {
+              // Classifying silence would force it into the nearest label, so
+              // report it and skip inference entirely.
+              $('verdict').innerHTML =
+                `<span class="dim">listening… ${listener.level().toFixed(0)} dB ` +
+                `(below the ${gateDb()} dB gate)</span>`;
+            } else {
+              const grabbed = Date.now();
+              const vec = embedAudio(pcm, listener.sampleRate);
+              await runInference(vec, 'live-audio', Date.now() - grabbed);
+            }
+          } else {
+            const v = $<HTMLVideoElement>('cam');
+            if (v.videoWidth && v.readyState >= 2) {
+              const grabbed = Date.now();
+              const vec = await embedFor(active!.rec.extractor, videoToSurface(v));
+              // Staleness = how old the input was by the time we had an answer.
+              // Surfaced so a slow extractor is visible rather than silently
+              // reporting the past as the present.
+              await runInference(vec, 'live', Date.now() - grabbed);
+            }
           }
+        } catch (e: any) {
+          log('live inference failed: ' + (e?.message ?? e), 'r');
+          stop = true;
         }
         const elapsed = performance.now() - started;
         await new Promise(r => setTimeout(r, Math.max(0, period - elapsed)));
       }
+      listener?.stop();
     })();
   });
 

@@ -295,5 +295,37 @@ function idsDefined(html: string): Set<string> {
   }
 }
 
+// ---------------------------------------------------------------- live audio
+{
+  const listen = read('../src/listen.ts');
+  check('continuous mode is no longer image-only',
+        !studioTs.includes('image-only'),
+        'audio was blocked with a log message');
+  // Check for CALLS, not mentions: the module explains in prose why it does not
+  // use MediaRecorder, so a bare substring test fails on its own comment.
+  check('audio uses a rolling buffer, not repeated MediaRecorder clips',
+        listen.includes('startListening') && listen.includes('ring[') &&
+        !/new MediaRecorder/.test(listen),
+        'restarting the recorder per window drops sounds on the boundary');
+  check('snapshot returns samples oldest-first',
+        /\(start \+ i\) % size/.test(listen),
+        'a raw ring read would scramble the time axis');
+  check('partial buffer is handled before it fills',
+        listen.includes('filled >= size') && listen.includes('subarray'));
+  check('silence is gated, not classified',
+        studioTs.includes('isSilent(pcm, gateDb())') &&
+        studioTs.includes('below the'),
+        'classifying silence forces it into the nearest label');
+  check('the gate is user-adjustable',
+        studioHtml.includes('id="gate"') && studioTs.includes('function gateDb('));
+  check('the listener is stopped on exit and on loop end',
+        (studioTs.match(/listener\?\.stop\(\)/g) ?? []).length >= 2,
+        'an open AudioContext keeps the mic hot');
+  check('audio staleness is measured too',
+        studioTs.includes("'live-audio'") && studioTs.includes('Date.now() - grabbed'));
+  check('the right device is named when missing',
+        /isAudio \? 'start the microphone first' : 'start the camera first'/.test(studioTs));
+}
+
 console.log(failed ? `\n${failed} FAILURE(S)` : '\nALL PASS');
 process.exit(failed ? 1 : 0);
