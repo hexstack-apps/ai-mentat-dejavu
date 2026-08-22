@@ -20,6 +20,7 @@ import type { Surface } from './dataset.js';
 import { renderVerdict } from './meters.js';
 import { loadBackbone, backboneReady } from './backbone.js';
 import { loadTmNet, tmReady, TM_DIM } from './tmnet.js';
+import { loadScNet, scReady, SC_DIM } from './scnet.js';
 import { startListening, isSilent, type Listener } from './listen.js';
 import { runSelfTest } from './selftest.js';
 
@@ -86,6 +87,9 @@ const EXTRACTORS_BY_MODALITY: Record<Modality, ExtractorSpec[]> = {
     { name: 'mel', dim: AUDIO_DIM, title: 'Log-mel bands (built-in)',
       device: 'any', task: 'claps, whistles, alarms, machine hum',
       cost: '~5 ms · no download' },
+    { name: 'scnet', dim: SC_DIM, title: 'Speech-commands (Teachable Machine)',
+      device: 'gpu', task: 'spoken words and syllables — try this for speech',
+      cost: '~40 ms · 2 MB' },
   ],
 };
 
@@ -140,7 +144,7 @@ async function featurise(s: Sample): Promise<Vec> {
     v = await embedFor(ex, surf);
   } else {
     const { samples: pcm, sampleRate } = await decodeAudioFile(s.blob);
-    v = embedAudio(pcm, sampleRate);
+    v = await embedAudioFor(ex, pcm, sampleRate);
   }
   s.vecs = { ...(s.vecs ?? {}), [ex]: Array.from(v).map(x => +x.toFixed(6)) };
   if (s.id !== undefined) await samples.update(s);   // cache so retrain is fast
@@ -164,9 +168,22 @@ async function embedFor(extractor: string, surf: Surface): Promise<Vec> {
   throw new Error(`this page cannot compute "${extractor}" features`);
 }
 
+/** Embed one clip with whichever audio extractor the model was trained on. */
+async function embedAudioFor(
+  extractor: string, pcm: Float32Array, sampleRate: number,
+): Promise<Vec> {
+  if (extractor === 'scnet') {
+    const bb = await loadScNet(m => log(m));
+    return bb.embed(pcm, sampleRate);
+  }
+  if (extractor === 'mel') return embedAudio(pcm, sampleRate);
+  throw new Error(`this page cannot compute "${extractor}" features`);
+}
+
 /** Extractors this page can actually run, per modality. */
 const RUNNABLE: Record<string, Modality> =
-  { photo: 'image', tmnet: 'image', dinov3: 'image', dinov2: 'image', mel: 'audio' };
+  { photo: 'image', tmnet: 'image', dinov3: 'image', dinov2: 'image',
+    mel: 'audio', scnet: 'audio' };
 
 /** Is a stored model usable here, and if not, why? */
 function compatibility(rec: StoredModel): { ok: boolean; reason: string } {
@@ -647,6 +664,9 @@ export async function boot() {
       log(`first training run downloads ${e.cost.split('· ')[1]} (then cached); ` +
           `on a phone prefer MobileNetV2`, 'o');
     }
+    if (e.name === 'scnet' && !scReady()) {
+      log('first run downloads the speech-commands model (~2 MB, then cached)', 'o');
+    }
     if (e.name === 'tmnet' && !tmReady()) {
       log("first run downloads Teachable Machine's MobileNetV2 (~1.6 MB, then cached)", 'o');
     }
@@ -813,7 +833,7 @@ export async function boot() {
         log(`listening ${ms} ms…`);
         const blob = await recordClip(ms);
         const { samples: pcm, sampleRate } = await decodeAudioFile(blob);
-        await runInference(embedAudio(pcm, sampleRate), 'mic');
+        await runInference(await embedAudioFor(active.rec.extractor, pcm, sampleRate), 'mic');
       }
     } catch (e: any) { log('inference failed: ' + (e?.message ?? e), 'r'); }
   });
@@ -826,7 +846,7 @@ export async function boot() {
         await runInference(await embedFor(active.rec.extractor, await fileToSurface(f)), 'file');
       } else {
         const { samples: pcm, sampleRate } = await decodeAudioFile(f);
-        await runInference(embedAudio(pcm, sampleRate), 'file');
+        await runInference(await embedAudioFor(active.rec.extractor, pcm, sampleRate), 'file');
       }
     } catch (err: any) { log('could not read file: ' + (err?.message ?? err), 'r'); }
     (e.target as HTMLInputElement).value = '';
@@ -843,7 +863,7 @@ export async function boot() {
       return;
     }
     if (!active) { log('train or load a model first', 'r'); return; }
-    const isAudio = active.rec.extractor === 'mel';
+    const isAudio = RUNNABLE[active.rec.extractor] === 'audio';
     if (active.rec.extractor === 'dinov2' || active.rec.extractor === 'dinov3') {
       log(`note: ${active.rec.extractor} takes ~2 s per frame — raise the interval`, 'o');
     }
@@ -888,7 +908,7 @@ export async function boot() {
                 `(below the ${gateDb()} dB gate)</span>`;
             } else {
               const grabbed = Date.now();
-              const vec = embedAudio(pcm, listener.sampleRate);
+              const vec = await embedAudioFor(active!.rec.extractor, pcm, listener.sampleRate);
               await runInference(vec, 'live-audio', Date.now() - grabbed);
             }
           } else {

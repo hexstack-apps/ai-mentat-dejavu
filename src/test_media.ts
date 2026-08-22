@@ -10,6 +10,7 @@
 import { embedAudio, AUDIO_DIM, resample, rmsDb, N_MELS } from './audio.js';
 import { embedPhoto, PHOTO_DIM } from './photo.js';
 import { embedV2 } from './features.js';
+import { readFileSync } from 'node:fs';
 import { createCanvas } from './canvas.js';
 import { Pipeline, mulberry32, norm2, mean, type Mat } from './linalg.js';
 import type { Surface } from './dataset.js';
@@ -209,6 +210,63 @@ function fakePhoto(kind: 'red-left' | 'blue-right' | 'stripes', seed: number): S
         stores.every(n => srcA.includes(`'${n}'`)), stores.join(','));
   check('samples.ts upgrade creates all stores',
         stores.every(n => srcB.includes(`'${n}'`)), stores.join(','));
+}
+
+// ---------------------------------------------------------------- speech-commands
+{
+  const { scSpectrogram, SC_FRAMES, SC_BINS, SC_SR, SC_FFT } = await import('./scnet.js');
+  const need = SC_FRAMES * SC_FFT;
+  const tone = (f: number) => {
+    const x = new Float32Array(need);
+    for (let i = 0; i < need; i++) x[i] = 0.3 * Math.sin((2 * Math.PI * f * i) / SC_SR);
+    return x;
+  };
+  const spec = scSpectrogram(tone(1000));
+  check('spectrogram matches the model input shape',
+        spec.length === SC_FRAMES * SC_BINS, `${SC_FRAMES}x${SC_BINS}`);
+  check('spectrogram is finite', Array.from(spec).every(Number.isFinite));
+
+  // The library z-normalises the whole tensor; a mismatch here degrades the
+  // features silently, which is exactly the per-band-mean bug in audio.ts.
+  const m = spec.reduce((a, b) => a + b, 0) / spec.length;
+  const sd = Math.sqrt(spec.reduce((a, b) => a + (b - m) ** 2, 0) / spec.length);
+  check('per-spectrogram z-normalisation',
+        Math.abs(m) < 1e-4 && Math.abs(sd - 1) < 0.01,
+        `mean ${m.toExponential(1)}, sd ${sd.toFixed(4)}`);
+
+  // A known tone must land in the right frequency bin — proof the FFT and the
+  // 232-bin truncation are wired correctly rather than merely plausible.
+  const binHz = SC_SR / SC_FFT;
+  const want = Math.round(1000 / binHz);
+  const f0 = spec.subarray(0, SC_BINS);
+  let peak = 0;
+  for (let k = 1; k < SC_BINS; k++) if (f0[k] > f0[peak]) peak = k;
+  check('1 kHz tone peaks in the correct bin', Math.abs(peak - want) <= 2,
+        `bin ${peak} (~${(peak * binHz).toFixed(0)} Hz), expected ${want}`);
+  check('232 bins give the documented ~10 kHz ceiling',
+        Math.abs(SC_BINS * binHz - 10000) < 200,
+        `${(SC_BINS * binHz / 1000).toFixed(1)} kHz`);
+
+  const a = scSpectrogram(tone(400)), b = scSpectrogram(tone(3000));
+  let d = 0;
+  for (let i = 0; i < a.length; i++) d += (a[i] - b[i]) ** 2;
+  check('different pitches give different spectrograms', Math.sqrt(d) > 10,
+        `distance ${Math.sqrt(d).toFixed(1)}`);
+
+  // shorter-than-1s input must pad, not crash
+  const shortSpec = scSpectrogram(new Float32Array(1000));
+  check('short clip is padded, not rejected',
+        shortSpec.length === SC_FRAMES * SC_BINS &&
+        Array.from(shortSpec).every(Number.isFinite));
+
+  const sc = readFileSync(new URL('../src/scnet.ts', import.meta.url), 'utf8');
+  check('the classifier head is discarded',
+        sc.includes('dense[dense.length - 2]') && sc.includes('SC_DIM'),
+        'the 20-way word logits would be a far worse representation');
+  check('architecture is asserted before use',
+        sc.includes('expected input') && sc.includes('expected a'));
+  check('resamples to the rate the model was trained at',
+        sc.includes('toScRate') && sc.includes('SC_SR = 44100'));
 }
 
 console.log(failed ? `\n${failed} FAILURE(S)` : '\nALL PASS');
