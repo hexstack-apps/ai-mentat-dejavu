@@ -7,7 +7,7 @@
 #     cache name changes exactly when the code does. A date alone would either
 #     bust on every deploy (pointless churn) or not at all if reused.
 set -e
-SRC=/var/minis/shared/tmjs
+SRC=/var/minis/repos/ai-mentat-dejavu
 OUT=/var/minis/shared/webhost/ai-dejavu-site/ai-dejavu
 
 cd "$SRC"
