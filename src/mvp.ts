@@ -16,6 +16,7 @@ import { store, hasIDB, type StoredModel, type MatchEvent } from './store.js';
 import { toRecord, fromRecord, toJSON, classify } from './serialize.js';
 import { dispatch, defaultConfig, type ActionConfig, type Sink } from './actions.js';
 import { renderVerdict } from './meters.js';
+import { quiet } from './failsafe.js';
 
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
 const pct = (v: number) => `${(v * 100).toFixed(1)}%`;
@@ -71,7 +72,11 @@ function restoreConfig() {
     document.querySelectorAll<HTMLInputElement>('.tgt').forEach(i => {
       i.checked = (c.targets ?? []).includes(i.value);
     });
-  } catch { /* ignore malformed saved config */ }
+  } catch (e) {
+    // Same as studio: the page must still load, but the user losing their
+    // saved targets with no message is a silent data loss.
+    quiet('mvp.loadConfig', () => { throw e; }, null);
+  }
 }
 
 // ---------------------------------------------------------------- training

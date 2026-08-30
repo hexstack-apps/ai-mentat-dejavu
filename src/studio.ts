@@ -25,6 +25,7 @@ import { startListening, isSilent, type Listener } from './listen.js';
 import { runSelfTest } from './selftest.js';
 import { exportScript } from './exporter.js';
 import { RUNTIME_PHOTO, RUNTIME_MEL } from './runtime-src.js';
+import { quiet } from './failsafe.js';
 
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
 const pct = (v: number) => `${(v * 100).toFixed(1)}%`;
@@ -309,7 +310,13 @@ async function startCamera() {
   try {
     videoInputs = (await navigator.mediaDevices.enumerateDevices())
       .filter(d => d.kind === 'videoinput');
-  } catch { videoInputs = []; }
+  } catch (e) {
+    // Recorded, not swallowed: an empty list hides the flip button, so the
+    // user sees a missing control with no explanation. enumerateDevices can
+    // fail on permission revocation or in an insecure context.
+    videoInputs = [];
+    quiet('studio.enumerateDevices', () => { throw e; }, null);
+  }
   $('flip').style.display = videoInputs.length > 1 ? '' : 'none';
 
   const track = stream.getVideoTracks()[0];
@@ -595,7 +602,11 @@ function restoreConfig() {
     $<HTMLSelectElement>('hookMethod').value = c.webhookMethod ?? 'POST';
     $<HTMLInputElement>('cool').value = String(c.cooldownMs ?? 0);
     config = { ...config, ...c };
-  } catch { /* ignore */ }
+  } catch (e) {
+    // A malformed saved config must not stop the page loading, but silently
+    // discarding it means the user's settings vanish with no clue why.
+    quiet('studio.loadConfig', () => { throw e; }, null);
+  }
 }
 
 // ---------------------------------------------------------------- inference

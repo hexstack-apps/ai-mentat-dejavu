@@ -4,10 +4,11 @@
   "main": "index.js",
   "scripts": {
     "build": "tsc",
-    "test": "node dist/test.js && node dist/test_actions.js",
+    "test": "node dist/test.js && node dist/test_actions.js && node dist/test_backbone.js && node dist/test_flow.js && node dist/test_media.js && node dist/test_failsafe.js",
     "cli": "node dist/cli.js",
     "serve": "node dist/server.js 8772 .",
-    "site": "tsc && mkdir -p site/dist && cp dist/*.js site/dist/ && node dist/server.js 8773 site"
+    "site": "tsc && mkdir -p site/dist && cp dist/*.js site/dist/ && node dist/server.js 8773 site",
+    "test:build": "npm run build && npm test"
   },
   "keywords": [],
   "author": "",
