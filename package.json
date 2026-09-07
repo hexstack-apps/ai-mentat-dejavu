@@ -1,8 +1,9 @@
 {
   "name": "ai-dejavu",
   "version": "0.1.0",
-  "main": "index.js",
+  "main": "electron-main.bundle.js",
   "scripts": {
+    "start": "electron electron-main.js",
     "build": "tsc",
     "test": "node dist/test.js && node dist/test_actions.js && node dist/test_backbone.js && node dist/test_flow.js && node dist/test_media.js && node dist/test_failsafe.js",
     "cli": "node dist/cli.js",
@@ -19,6 +20,7 @@
   },
   "devDependencies": {
     "@types/node": "^26.2.0",
+    "electron": "^44.0.0",
     "typescript": "^7.0.2"
   },
   "type": "module",
